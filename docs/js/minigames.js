@@ -90,7 +90,12 @@
 
   /* Multiple-choice password questions */
   function password(cfg) {
-    const set = FT.util.draw("password", cfg.data, 4); let i = 0, correct = 0;
+    // Shuffle each question's options so the right answer isn't always in the same spot
+    const set = FT.util.draw("password", cfg.data, 4).map(q => {
+      const order = shuffle(q.opts.map((_, k) => k));
+      return Object.assign({}, q, { opts: order.map(k => q.opts[k]), ans: order.indexOf(q.ans) });
+    });
+    let i = 0, correct = 0;
     function draw(choice) {
       const e = set[i], answered = choice !== undefined, ok = choice === e.ans;
       FT.app.innerHTML = ui.header() + `<div class="panel"><h2>Password check</h2>
@@ -120,8 +125,11 @@
     const set = FT.util.draw("triage", cfg.data, cfg.count || 4);
     let i = 0, score = 0, escalations = 0;
     const labels = { fp: "False positive", real: "Real threat: contain it", escalate: "Escalate for review" };
+    // The first-time tip is fetched once (fetching it marks it as seen)
+    let hintText = cfg.hint ? cfg.hint(S) : "";
     function draw(choice) {
       const a = set[i], answered = choice !== undefined;
+      if (i > 0 || answered) hintText = "";
       let verdict = "";
       if (answered) {
         const right = choice === a.answer, half = !right && (choice === "escalate" || a.answer === "escalate");
@@ -129,7 +137,7 @@
       }
       FT.app.innerHTML = ui.header() + `<div class="panel"><h2>Alert queue</h2>
         <p>${cfg.intro} (${i + 1} of ${set.length})</p>
-        ${i === 0 && cfg.hint && cfg.hint(S) ? ui.advisor(`<p>${cfg.hint(S)}</p>`, "tut") : ""}
+        ${hintText ? ui.advisor(`<p>${hintText}</p>`, "tut") : ""}
         <div class="alertcard"><div class="ahead"><b>${a.title}</b><span class="asrc">${a.source}</span><span class="atime">${a.time}</span></div>
           <pre class="log">${a.log}</pre></div>
         ${answered ? `${verdict}<p>${a.why}</p><div class="row"><button class="btn" id="n">${i < set.length - 1 ? "Next alert" : "Finish"}</button></div>`
