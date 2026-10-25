@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!--
+  The Firewall Trail
+  Copyright (C) 2026 Steven Lorenz (pslorenz)
+  Licensed under the GNU General Public License v3.0 or later. See LICENSE.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Firewall Trail</title>
+<meta name="description" content="An Oregon Trail–style cybersecurity game. Survive a year in security, from the help desk to the boardroom.">
+<meta name="theme-color" content="#1B2A38">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<!-- Link previews (Slack, Teams, social). Update the URLs if the site moves. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="The Firewall Trail">
+<meta property="og:description" content="An Oregon Trail–style cybersecurity game. Survive a year in security, from the help desk to the boardroom.">
+<meta property="og:url" content="https://pslorenz.github.io/firewall-trail/">
+<meta property="og:image" content="https://pslorenz.github.io/firewall-trail/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Firewall Trail: a pixel-art van on a dashed trail across the months of the year.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<footer class="sitefoot noprint"><button class="linkish" id="feedback">Found a bug or have feedback? Open a GitHub issue</button></footer>
+
+<!-- Engine: order matters, each file builds on the ones before it -->
+<script src="js/core.js"></script>
+<script src="js/systems.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/minigames.js"></script>
+<script src="js/finale.js"></script>
+<script src="js/years.js"></script>
+<script src="js/share.js"></script>
+<script src="js/picker.js"></script>
+<script src="js/screens.js"></script>
+
+<!-- Modes: each mode's mode.js first, then its content files -->
+<script src="modes/student/mode.js"></script>
+<script src="modes/student/events.js"></script>
+<script src="modes/student/minigames.js"></script>
+<script src="modes/practitioner/mode.js"></script>
+<script src="modes/practitioner/finale.js"></script>
+<script src="modes/practitioner/hospital.js"></script>
+<script src="modes/practitioner/manufacturing.js"></script>
+<script src="modes/practitioner/software.js"></script>
+<script src="modes/practitioner/msp.js"></script>
+<script src="modes/practitioner/smallbiz.js"></script>
+<script src="modes/leadership/mode.js"></script>
+<script src="modes/leadership/settings.js"></script>
+<script src="modes/leadership/msp.js"></script>
+
+<script src="js/main.js"></script>
+</body>
+</html>
