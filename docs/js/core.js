@@ -40,11 +40,13 @@ window.FT = (function () {
     random() { return rng.gen(); },
     // A separate generator for one-off uses, so it doesn't disturb the current stream
     fork(tag) { return mulberry(hash((rng.seed || "x") + "|" + tag)); },
-    // Codes look like PHNT-K7F3Q: prefix letters from the mode, then the seed
-    code(prefix) { return `${prefix}-${rng.seed}`; },
+    // Codes look like PHNT-K7F3Q: prefix letters from the mode, then the seed.
+    // Once a mode's rules change, its codes end with the rules version (PHNT-K7F3Q-2),
+    // so a code from an older version can say so instead of silently playing differently.
+    code(prefix, version) { return `${prefix}-${rng.seed}${version > 1 ? `-${version}` : ""}`; },
     parse(code) {
-      const m = String(code || "").toUpperCase().replace(/[^A-Z0-9-]/g, "").match(/^([A-Z]{1,4})-?([A-Z2-9]{5})$/);
-      return m ? { prefix: m[1], seed: m[2] } : null;
+      const m = String(code || "").toUpperCase().replace(/[^A-Z0-9-]/g, "").match(/^([A-Z]{1,4})-?([A-Z2-9]{5})(?:-?([0-9]{1,2}))?$/);
+      return m ? { prefix: m[1], seed: m[2], version: m[3] ? Number(m[3]) : 1 } : null;
     },
     ALPHA
   };

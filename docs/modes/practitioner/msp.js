@@ -109,6 +109,9 @@
     },
 
     /* ---------- MSP tasks ---------- */
+    // Client restore tests are the backup task here; third-party access is covered by the RMM, vault and admin tasks
+    mfaDrift: 5, // new techs, new client tenants and new tools every month
+    baseOverrides: { backup: { name: "Run client restore tests", desc: "Restore a sample of client systems from backup, to prove they work." }, vendorreview: { hide: true } },
     actions: [
       { id: "rmm", kind: "upkeep", skill: "infra", name: "Harden the RMM", desc: "MFA and IP limits on the console, script approval, tamper protection on agents.",
         apply: (S, k) => { S.rmm = clamp(S.rmm + Math.round(30 * k)); return "Hardened the RMM: tightened console access and script approval."; } },
@@ -116,7 +119,7 @@
         apply: (S, k) => { S.adminAccess = clamp(S.adminAccess + Math.round(30 * k)); return "Audited admin access across client tenants and removed what nobody needed."; } },
       { id: "vault", kind: "upkeep", skill: "infra", name: "Audit and rotate the credential vault", desc: "Find stale client passwords, rotate shared ones, check who can see what.",
         apply: (S, k) => { S.vault = clamp(S.vault + Math.round(30 * k)); return "Audited the credential vault and rotated a batch of shared client passwords."; } },
-      { id: "standardize", kind: "upkeep", skill: "lead", name: "Bring a client onto the standard stack", desc: "Talk a holdout client into the standard security stack.",
+      { id: "standardize", kind: "upkeep", skill: "lead", improves: ["standard", "exceptions"], name: "Bring a client onto the standard stack", desc: "Talk a holdout client into the standard security stack.",
         apply: (S, k) => { S.standard = clamp(S.standard + Math.round(15 * k)); if (S.exceptions && S.exceptions.length && chance(.5 * k)) { const c = S.exceptions.shift(); return `${c} agreed to the standard security stack. One less exception.`; } return "Moved another client onto the standard security stack."; } },
       { id: "pam", kind: "project", skill: "infra", cost: 30000, work: 4, name: "Just-in-time admin access", desc: "No standing admin rights into client tenants; techs request access per task.",
         done: S => { S.pam = true; S.adminAccess = Math.max(S.adminAccess, 75); return "Just-in-time admin access is live. Nobody holds standing admin rights into client tenants anymore."; } },
@@ -153,11 +156,11 @@
         ["Credential vault", lvl(S.vault, 70, 40), S.vault >= 70 ? "Audited" : S.vault >= 40 ? "Getting stale" : "Years of old passwords"],
         ["Client standard", lvl(S.standard, 70, 40), `${S.standard >= 70 ? "Most clients" : S.standard >= 40 ? "About half" : "Few clients"} on the standard stack`],
         ["Client exceptions", !(S.exceptions || []).length ? "good" : S.exceptions.length <= 1 ? "warn" : "bad", (S.exceptions || []).length ? S.exceptions.join(", ") : "None"],
-        ["Client backups", S.backupTested ? "good" : "bad", (S.backupTested ? (S.backupAge === 0 ? "Restore tested this month" : `Restore tested ${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`) : "Restore not tested recently") + (S.immutable ? ", immutable" : "")],
+        mode.backupRow("Client backups"),
         ["Patching", lvl(S.patch, 70, 40), S.patch >= 70 ? "Current" : S.patch >= 40 ? "Falling behind" : "Badly behind"],
         ["Detection rules", lvl(S.detect, 70, 40), S.detect >= 70 ? "Watching tool activity" : S.detect >= 40 ? "Drifting" : "Blind to tech activity"],
         ["Endpoint protection", lvl(S.edr, 75, 50), S.edr >= 75 ? `Well tuned (${S.edr}%)` : `Partly tuned (${S.edr}%)`],
-        ["Multi-factor login", S.mfa ? "good" : "bad", S.mfa ? "On every tool" : "Not on every tool"],
+        mode.mfaRow("Multi-factor login", "On every tool", "On every tool, phishing-resistant") || ["Multi-factor login", "bad", "Not on every tool"],
         ["Offboarding", S.stale <= 3 ? "good" : S.stale <= 9 ? "warn" : "bad", S.stale === 0 ? "Clean" : `${S.stale} stale accounts (techs and old clients)`],
         ["Incident plan", S.irPlan ? "good" : "bad", S.irPlan ? "Written and tested" : "None"]
       ];
@@ -171,11 +174,11 @@
       "Credential vault": "Tier zero. The documentation platform holding every client’s passwords. Audit who can see what and rotate what’s stale.",
       "Client standard": "How many clients run your standard security stack. Exceptions creep in every month.",
       "Client exceptions": "Clients granted exceptions to the standard stack, usually to keep them happy.",
-      "Client backups": "Proven by restore tests. Immutable backups can’t be deleted even with your own admin credentials.",
+      "Client backups": "Proven by restore tests. Immutable backups can’t be deleted even with your own admin credentials. A restore test counts for about two months, then needs repeating.",
       "Patching": "Your own systems and clients’ endpoints.",
       "Detection rules": "Whether you’d notice unusual activity by your own tools and technicians.",
       "Endpoint protection": "The EDR you deploy to client endpoints, managed from one console.",
-      "Multi-factor login": "On every tool: RMM, PSA, vault, backup and remote access consoles.",
+      "Multi-factor login": "On every tool: RMM, PSA, vault, backup and remote access consoles. Coverage slips over time as people join and exceptions pile up.",
       "Offboarding": "Accounts for departed technicians, and your access into clients who left.",
       "Incident plan": "Who calls which clients, what contracts say, and how to shut down shared tools safely.",
       "Acquired clients": "Clients from the MSP you bought, still on its old, unknown tools.",
@@ -262,9 +265,10 @@
   const blast = ["Blast radius", "At an MSP, a compromised tool or technician account reaches every client at once. Protecting the shared stack protects all of them."];
   msp.events = [
     { id: "techphish", title: "A technician’s account is phished", run() {
-      if (S.mfa && S.adminAccess >= 50) return { text: "A help desk tech entered his password on a fake RMM login page. Multi-factor login stopped the attacker, and his access into clients was limited anyway.", fx: { trust: 2 }, lesson: blast };
-      if (S.mfa) return { text: "A help desk tech entered his password on a fake RMM login page. Multi-factor login stopped the attacker this time, but Mateo noticed that account had admin rights in 60 client tenants.", fx: { morale: -2 }, lesson: blast };
-      return { text: `A help desk tech entered his password on a fake RMM login page. Within the hour, the attacker used it to run a script on machines at ${CLIENTS.dental} and ${CLIENTS.cpa}. You caught it before encryption, barely.`, fx: { trust: -15, care: -14, morale: -6 }, lesson: blast };
+      const mfa = mode.mfaOn();
+      if (mfa && S.adminAccess >= 50) return { text: "A help desk tech entered his password on a fake RMM login page. Multi-factor login stopped the attacker, and his access into clients was limited anyway.", fx: { trust: 2 }, lesson: blast };
+      if (mfa) return { text: "A help desk tech entered his password on a fake RMM login page. Multi-factor login stopped the attacker this time, but Mateo noticed that account had admin rights in 60 client tenants.", fx: { morale: -2 }, lesson: blast };
+      return mode.foothold(`a remote-access agent the attacker installed at ${CLIENTS.cpa} during that hour`, mode.mfaGap({ text: `A help desk tech entered his password on a fake RMM login page. Within the hour, the attacker used it to run a script on machines at ${CLIENTS.dental} and ${CLIENTS.cpa}. You caught it before encryption, barely.`, fx: { trust: -15, care: -14, morale: -6 }, lesson: blast }));
     } },
     { id: "lawmfa", title: "The law firm wants an exception", intro: `${CLIENTS.law}’s managing partner refuses multi-factor login for the partners. “We bill by the minute.” They’re one of your biggest clients.`, choices: [
       { label: "Hold the line", run() {
@@ -306,7 +310,7 @@
         return { text: "The patches went in without trouble. The partners never noticed.", fx: { care: -1 }, lesson: ["Client context", "Security changes that ignore a client’s business calendar can cost you the client."] }; } }
     ] },
     { id: "mspinsurance", title: "Your own cyber insurance renewal", run() {
-      const good = (S.mfa ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.rmm >= 60 ? 1 : 0);
+      const good = (mode.mfaFull() ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.rmm >= 60 ? 1 : 0);
       if (good >= 3) return { text: "The insurer’s MSP questionnaire asked about MFA on every tool, RMM hardening, tested backups and an incident plan. You had evidence for all of it. The premium went down.", fx: { trust: 5, budget: 5000 }, lesson: ["Insurers know MSPs", "Insurers ask MSPs pointed questions about tier-zero tools, because MSP breaches are so expensive."] };
       return { text: "The insurer’s MSP questionnaire asked about MFA on every tool, RMM hardening, tested backups and an incident plan. You had gaps. The premium nearly doubled, and RMM-related claims are now excluded.", fx: { trust: -8, budget: -10000 }, lesson: ["Insurers know MSPs", "Insurers ask MSPs pointed questions about tier-zero tools, because MSP breaches are so expensive."] };
     } },
@@ -488,12 +492,16 @@
   /* ---------- Ransomware night: the supply-chain attack ---------- */
   msp.finale = {
     title: "Ransomware night",
+    leak: {
+      data: S => `client files and the passwords to their systems, from ${CLIENTS.dental} to ${CLIENTS.cpa}`, people: S => "every affected client",
+      rule: S => ", with a list of what was taken from each one", cost: S => 25000, payCost: S => 100000
+    },
     times: ["11:48 PM", "12:02 AM", "12:15 AM", "12:29 AM", "12:41 AM", "12:54 AM", "1:04 AM", "1:12 AM"],
     intro: S => `Late on a Friday before a holiday weekend, the ${S.gang.name} gang turns its attention to ${ORG}. They don’t want you. They want your 70 clients, and your tools are the way in. They start with your weakest spot and keep going until something works.`,
     vectors: S => [
-      { name: "phishing a technician", p: 1 - (1 - sys.eff(S.filter)) * (1 - S.training / 100 * .8), hold: "The tech they targeted reported the fake RMM login page.", fail: "A tech entered his password on a convincing fake RMM login page." },
+      { name: "phishing a technician", kind: "phish", p: 1 - (1 - sys.eff(S.filter)) * (1 - sys.awareness(S)), hold: "The tech they targeted reported the fake RMM login page.", fail: "A tech entered his password on a convincing fake RMM login page." },
       { name: "the RMM itself", p: (S.rmm / 100) * .9 + (S.patch >= 60 ? .05 : 0), hold: "The RMM console only accepts logins from your office, with MFA.", fail: "Your RMM console was reachable from the internet, with a flaw the vendor patched last month." },
-      { name: "a stolen tech password", p: S.mfa ? .95 : .15, hold: "Multi-factor login on every tool asked for a code they didn’t have.", fail: "They bought a former intern’s password online, and it still worked on the PSA. No second factor was required." },
+      { name: "a stolen tech password", p: mode.mfaP(.95, .15), hold: "Multi-factor login on every tool asked for a code they didn’t have.", fail: "They bought a former intern’s password online, and it still worked on the PSA. No second factor was required." },
       { name: "the credential vault", p: S.vault >= 60 ? .9 : .3, hold: "The vault account they targeted had been rotated and locked to the office.", fail: "A vault account with access to every client’s passwords had never been rotated." },
       { name: "a departed technician’s account", p: S.stale <= 3 ? .95 : .3, hold: "The departed techs’ accounts were all disabled.", fail: `One of ${S.stale} stale accounts, belonging to a tech who left in the spring, still had admin access.` },
       { name: "a client with an exception", p: (S.exceptions || []).length ? .25 : .9, hold: "Every client was on the standard stack, with no soft spots to start from.", fail: `They started at ${(S.exceptions || [CLIENTS.law])[0]}, the client with an exception to your standard, and worked back to your tools.` }
@@ -551,8 +559,10 @@
       divertCare: -10, divertText: "You called every affected client before they called you, and worked in order of impact: the dental practice’s patients and the manufacturer’s payroll first.",
       stayBadCare: -25, stayBad: "You worked whoever called loudest. The quiet clients, including the food bank, waited four days, and found out what happened from the news.",
       stayOkCare: -8, stayOk: "You worked whoever called loudest. It was chaos, but the team kept up.",
-      restored: "Client backups were proven good and immutable, so the attackers couldn’t delete them. Every client was restored within a week.",
+      restored: "Client backups came through. Every client was restored within a week.",
       recoverClock: "9:00 AM", recoverTitle: "Recovery",
+      wipedTested: "Your restore tests proved client backups worked. They couldn’t prove the backups would survive an attacker holding your own admin credentials.",
+      restoredSlow: "Client backups survived, because nobody could delete them. But restores hadn’t been tested in months: half the clients’ restores failed on the first try, and the last ones took nearly two weeks.",
       noBackups: S => `<p>Many client backups are gone: the attackers deleted them through your own backup console. The gang wants $4.5 million to decrypt all 23 clients. Your insurance would cover part of it, after a $50,000 deductible from your budget.</p>`,
       recovery: [{ id: "pay", label: "Pay the ransom" }, { id: "rebuild", label: "Refuse and rebuild" }],
       deductible: 50000,

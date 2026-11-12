@@ -54,13 +54,17 @@
     { id: "backup", kind: "upkeep", skill: "infra", name: "Run a restore test", desc: "Prove the backups actually restore.", apply: S => { S.backupAge = 0; S.backupTested = true; return "Restore test passed. Backups are proven good."; } },
     { id: "train", kind: "upkeep", skill: "lead", cost: 2000, name: "Run phishing training", desc: "A short session plus a simulated phish.", apply: (S, k) => { S.training = clamp(S.training + Math.round(25 * k)); return "Ran phishing training for staff."; } },
     { id: "tunedetect", kind: "upkeep", skill: "detect", name: "Tune detection rules", desc: "Cut noisy alerts, add rules for real attacker behavior.", apply: (S, k) => { S.detect = clamp(S.detect + Math.round(20 * k)); return "Tuned detection rules."; } },
-    { id: "hunt", kind: "upkeep", skill: "detect", name: "Threat hunt", desc: "Go looking for what the alerts miss.", apply: (S, k) => { S.inventory = clamp(S.inventory + Math.round(30 * k)); const found = Math.min(S.stale, Math.round(3 * k)); S.stale -= found; return `Threat hunt mapped more of the network${found ? ` and found ${found} forgotten account${found > 1 ? "s" : ""}` : ""}.`; } },
+    { id: "hunt", kind: "upkeep", skill: "detect", name: "Threat hunt", desc: "Go looking for what the alerts miss, including attackers who never left.", apply: (S, k) => { S.inventory = clamp(S.inventory + Math.round(30 * k)); const found = Math.min(S.stale, Math.round(3 * k)); S.stale -= found; const gone = mode.sweep(Math.min(.9, .5 * k)); return `Threat hunt mapped more of the network${found ? ` and found ${found} forgotten account${found > 1 ? "s" : ""}` : ""}.${mode.sweepText(gone)}`; } },
     { id: "cleanup", kind: "upkeep", skill: "lead", name: "Offboarding cleanup with HR", desc: "Disable accounts for people who left.", apply: S => { const n = S.stale; S.stale = 0; return n ? `Disabled ${n} accounts for people who had left.` : "Checked offboarding. Nothing to disable."; } },
     { id: "tuneedr", kind: "upkeep", skill: "infra", name: "Tune endpoint protection", desc: "Policies, exclusions, more machines in blocking mode.", show: S => S.edr < 100, apply: (S, k) => { S.edr = clamp(S.edr + Math.round(20 * k)); return "Tuned endpoint protection."; } },
     { id: "tunefilter", kind: "upkeep", skill: "detect", name: "Tune the email filter", desc: "Look-alike domains, attachment sandboxing, link rewriting.", show: S => S.filter < 100, apply: (S, k) => { S.filter = clamp(S.filter + Math.round(20 * k)); return "Tuned the email filter."; } },
     { id: "vendorreview", kind: "upkeep", skill: "lead", name: "Review vendor access", desc: "Who still has remote access, and do they need it?", apply: (S, k) => { S.vendor = clamp(S.vendor + Math.round(30 * k)); return "Reviewed vendor remote access."; } },
     { id: "tunemdr", kind: "upkeep", skill: "detect", name: "Tune the MDR service", desc: "Teach it what normal looks like here. Self-tuning only goes so far.", show: S => S.mdr !== null && S.mdrNoisy && S.mdr < 60, apply: (S, k) => { S.mdr = Math.min(60, S.mdr + Math.round(12 * k)); if (S.mdr >= 55) S.mdrNoisy = false; return "Tuned MDR alerts."; } },
-    { id: "mfa", kind: "project", skill: "lead", cost: 20000, work: 3, name: "Roll out multi-factor login", desc: "Every account, including remote access.", done: S => { S.mfa = true; return "Multi-factor login is live for all staff."; } },
+    { id: "mfa", kind: "project", skill: "lead", cost: 20000, work: 3, name: "Roll out multi-factor login", desc: "Every account, including remote access.", done: S => { S.mfa = true; S.mfaCover = 100; return "Multi-factor login is live for all staff."; } },
+    { id: "mfagaps", kind: "upkeep", skill: "lead", show: S => S.mfa && S.mfaCover < 100, name: "Close multi-factor gaps", desc: "New hires who never enrolled, service accounts, and “temporary” exceptions that stayed.", apply: (S, k) => { S.mfaCover = clamp(S.mfaCover + Math.round(30 * k)); return `Closed multi-factor gaps: enrolled new hires and ended stale exceptions. Coverage is back to ${S.mfaCover}%.`; } },
+    { id: "phishres", kind: "project", skill: "infra", cost: 15000, work: 2, show: S => S.mfa, name: "Phishing-resistant sign-in", desc: "Security keys or passkeys for email, remote access and admins. A fake login page can’t use them.", done: S => { S.mfaStrong = true; return "Security keys and passkeys are live. Phone prompts are switched off as a fallback."; } },
+    { id: "immutable", kind: "project", skill: "infra", cost: 30000, work: 2, name: "Make backups immutable", desc: "Backups nobody can delete or change, not even with stolen admin credentials. Restore tests still prove they work.", done: S => { S.immutable = true; return "Backups are now immutable: nobody can delete them before they expire, not even an admin."; } },
+    { id: "mdrbuy", kind: "project", skill: "detect", cost: 50000, work: 1, show: S => S.mdr === null && S.month > S.mdrMonth, name: "Buy an MDR service", desc: "Analysts watching around the clock, with vendor onboarding. Full price now that the earlier offer has passed.", done: S => { S.mdr = 40; S.mdrRamp = true; S.mdrNoisy = false; return "The MDR service is signed and onboarding. Their analysts will be fully up to speed next month."; } },
     { id: "irplan", kind: "project", skill: "lead", cost: 0, work: 2, name: "Write and test an incident plan", desc: "Roles, call trees and a tabletop exercise with leadership.", done: S => { S.irPlan = true; return "The incident plan is written and tested."; } }
   ];
 
@@ -108,6 +112,67 @@
     { id: "pr-all", name: "Three for three", desc: "Earn an A at the hospital, the manufacturer and the software company.", test: (S, c, data) => FT.ach.allSettingsA(data, "practitioner", ["hospital", "manufacturing", "software"]) }
   ];
 
+  /* ---------- Shared status rows ----------
+   * Controls that matter in every setting. Each is added to a setting's status
+   * board unless the board already shows it, so every control a player can
+   * improve is visible, and every visible control has a task that improves it. */
+  const SHARED_ROWS = [
+    { key: "inventory", label: "Asset inventory", row: S => ["Asset inventory", S.inventory >= 60 ? "good" : S.inventory >= 30 ? "warn" : "bad", S.inventory >= 60 ? "Mostly mapped" : S.inventory >= 30 ? "Partly mapped" : "Mostly unknown"] },
+    { key: "filter", label: "Email filter", row: S => ["Email filter", S.filter >= 75 ? "good" : S.filter >= 50 ? "warn" : "bad", S.filter >= 75 ? `Well tuned (${S.filter}%)` : `Partly tuned (${S.filter}%)`] },
+    { key: "training", label: "Staff awareness", row: S => ["Staff awareness", S.training >= 60 ? "good" : S.training >= 35 ? "warn" : "bad", S.training >= 60 ? "Sharp" : S.training >= 35 ? "Fading" : "Low"] },
+    { key: "mdr", label: "MDR service", when: S => S.mdr !== null || S.month > S.mdrMonth, row: S => ["MDR service", S.mdr === null ? "bad" : S.mdrNoisy ? "warn" : S.mdr >= 80 ? "good" : "warn", S.mdr === null ? "None" : S.mdrNoisy ? "Noisy, needs tuning" : S.mdr >= 80 ? "Tuned and watching" : "Onboarding"] }
+  ];
+  const SHARED_EXPLAIN = {
+    "Asset inventory": "How much of the network you’ve actually mapped. You can’t contain what you can’t find, so it decides how precisely you can respond. It goes stale as things change.",
+    "Email filter": "How well incoming email is screened for phishing and malware. Default settings miss a lot.",
+    "Staff awareness": "How well people spot and report phishing. It fades without practice.",
+    "MDR service": "An outside team watching your systems around the clock."
+  };
+
+  /* Which state a task changes, read from its own code (S.x = ...), unless it
+   * says so itself with improves: [...]. Used only for the "Improve it with" hints. */
+  const IGNORE = new Set(["budget", "monthlyFees", "proj", "done", "notices", "trust", "care", "mdrRamp"]);
+  const varCache = new WeakMap();
+  function actionVars(a) {
+    if (a.improves) return a.improves;
+    if (varCache.has(a)) return varCache.get(a);
+    const src = String(a.apply || "") + String(a.done || ""), out = [];
+    for (const m of src.matchAll(/\bS\.(\w+)\s*(?:=(?!=)|\+=|-=|\+\+|--)/g)) if (!IGNORE.has(m[1]) && !out.includes(m[1])) out.push(m[1]);
+    varCache.set(a, out);
+    return out;
+  }
+  // Which status rows change when one piece of state changes. The boards only read
+  // state, so trying a couple of values and putting the original back is safe.
+  function rowsDependOn(board, key) {
+    if (!(key in S)) return [];
+    const orig = S[key];
+    const tries = typeof orig === "boolean" ? [true, false] : Array.isArray(orig) ? [[], ["x", "y"]] : orig === null ? [null, 85] : [0, 100];
+    const seen = tries.map(v => { S[key] = v; try { return board().map(r => r.join("|")); } catch (e) { return []; } });
+    S[key] = orig;
+    const labels = [];
+    seen[0].forEach((r, i) => { if (seen[1][i] !== r) labels.push(r.split("|")[0]); });
+    return labels;
+  }
+
+  /* ---------- Tutorial notes every setting shares ----------
+   * From month 4 on, each month a setting has no note of its own shows the next
+   * one of these, so they appear in order whatever the setting's calendar. */
+  const SHARED_NOTES = [
+    S => "Not sure what fixes a red row? Open “What do these mean?” under the status board: every row lists the tasks that improve it.",
+    S => "Backups need two things. A restore test proves they work, and counts for about two months. Immutability keeps attackers from deleting them, and ransomware crews go after backups first.",
+    S => `When an attacker gets in, a password reset isn’t always the end of it. Apps, tokens and tools they left behind can stay hidden for months. ${mode.actions.some(a => a.id === "hunt") ? "A threat hunt" : "Cleaning up old accounts"} is how you find them.`,
+    S => "Multi-factor login doesn’t stay at 100%. New hires skip enrolling and “temporary” exceptions stay. Watch its coverage on the status board, and close the gaps before attackers find them.",
+    S => "Most ransomware crews now copy data before they encrypt anything. Good backups get your systems back, but not your data, so catching them early still matters when your backups are solid."
+  ];
+  function sharedNote(month) {
+    if (month < 3) return null;
+    const notes = mode.setting.tutorial.monthNotes || {};
+    if (notes[month]) return null;
+    let i = -1;
+    for (let m = 3; m <= month; m++) if (!notes[m]) i++;
+    return SHARED_NOTES[i] ? SHARED_NOTES[i](S) : null;
+  }
+
   const mode = {
     id: "practitioner",
     name: "Practitioner mode",
@@ -132,11 +197,47 @@
         subRandomDesc: "You’ll find out what kind of business it is on day one." }
     ],
     allSettings: () => settings,
+    /* ---------- Access left behind ----------
+     * When attackers get in during the year and nobody fully evicts them, the
+     * access lingers, hidden, until a threat hunt or a detection finds it. On
+     * ransomware night it's the first thing they try. Events call foothold()
+     * on the outcomes where that happens; it passes the outcome through. */
+    foothold(what, r) {
+      S.lingering = S.lingering || [];
+      S.lingering.push({ what, month: (mode.months || [])[S.month] || "earlier in the year" });
+      return r;
+    },
+    // Each piece of lingering access is found with probability p; returns what was found
+    sweep(p) {
+      const found = [], left = [];
+      for (const x of S.lingering || []) (chance(p) ? found : left).push(x);
+      S.lingering = left;
+      if (found.length) L.set(...mode.dwellLesson);
+      return found;
+    },
+    sweepText(found) {
+      if (!found.length) return "";
+      return ` It also turned up ${found.map(x => `${x.what}, left over from ${x.month}`).join("; and ")}. Shut down now.`;
+    },
+    dwellLesson: ["Dwell time", "Attackers who get in once often stay. Resetting a password doesn’t remove the app, token or tool they left behind; hunting for it does."],
+    // Alert triage: closing a real threat as a false positive leaves the attacker in place
+    onTriageMiss(a) { if (chance(.6)) mode.foothold(`the activity behind the “${a.title}” alert that was closed as a false positive`); },
+    // Inbox check: a phish waved through as legit sometimes gets a password
+    onPhishMiss(e) { if (chance(.4)) mode.foothold(`a sign-in stolen by the “${e.subj}” email`); },
+
+    // Backups need two things: a recent restore test (they work) and immutability (attackers can't delete them)
+    backupRow(label) {
+      const tested = S.backupTested ? (S.backupAge === 0 ? "Restore tested this month" : `Restore tested ${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`) : "Restore not tested recently";
+      return [label, S.backupTested && S.immutable ? "good" : S.backupTested || S.immutable ? "warn" : "bad", `${tested}, ${S.immutable ? "immutable" : "not immutable"}`];
+    },
     DIFFICULTY,
 
     /* Choices on the intro screen, kept for "Play another year" */
     /* ---------- Year codes: P + setting + difficulty + start, e.g. PHNT ---------- */
     codeLetter: "P",
+    // Bump when a change makes an existing year code play out differently.
+    // Codes record it, so a code from an older version says so when loaded.
+    rulesVersion: 2,
     codePrefix: S => "P" + mode.setting.letter + { easy: "E", normal: "N", hard: "H" }[S.difficulty] + STARTS.find(x => x.id === S.startInfo.id).letter,
     loadCode(prefix) {
       if (prefix.length !== 4) return false;
@@ -178,8 +279,16 @@
     addSetting(st) { settings[st.id] = st; if (!mode.setting) mode.useSetting(st.id); },
     useSetting(id) {
       const st = mode.setting = settings[id];
-      for (const k of ["months", "landmarks", "events", "minigames", "explain", "winTitle"]) mode[k] = st[k];
-      mode.actions = (st.replaceBase ? [] : baseActions).concat(st.actions || []);
+      for (const k of ["months", "landmarks", "events", "minigames", "winTitle"]) mode[k] = st[k];
+      // A setting's own action replaces the shared one with the same id. A setting
+      // can also rename a shared action (baseOverrides: { id: { name, desc } }) or
+      // drop one that means nothing there (baseOverrides: { id: { hide: true } }).
+      const own = st.actions || [], over = st.baseOverrides || {};
+      const shared = st.replaceBase ? [] : baseActions
+        .filter(b => !own.some(a => a.id === b.id) && !(over[b.id] && over[b.id].hide))
+        .map(b => over[b.id] ? Object.assign({}, b, over[b.id]) : b);
+      mode.actions = shared.concat(own);
+      mode.explain = Object.assign({}, SHARED_EXPLAIN, st.explain || {});
       if (st.meters) mode.meters = st.meters;
     },
 
@@ -193,14 +302,16 @@
         diff, difficulty: mode.prefs.difficulty, settingId: st.id, tutorial: mode.prefs.tutorial, tip: 0, replaced: 0,
         budget: Math.round((st.startBudget || 80000) * diff.budget), trust: 65, care: 90,
         patch: 50, backupAge: 4, backupTested: false, training: 30, detect: 35, inventory: 30,
-        mfa: false, filter: 50, edr: 50, stale: 10, vendor: 20, irPlan: false,
+        mfa: false, mfaStrong: false, mfaCover: 100, immutable: false, lingering: [], filter: 50, edr: 50, stale: 10, vendor: 20, irPlan: false,
         mdr: null, mdrNoisy: false, mdrRamp: false,
         proj: {}, done: {}, notices: [st.briefing],
         mdrMonth: 5 + Math.floor(FT.util.rand() * 3),
         expandMonth: 3 + Math.floor(FT.util.rand() * 2), expanded: false,
         interrupts: [], interruptMonth: -1,
         finaleMonth: 9 + Math.floor(FT.util.rand() * 3),
-        gang: { name: pick(["Night Ledger", "GreyTide", "LockBlossom", "Cold Harbor", "Static Choir"]) }
+        // About one gang in four is on a sanctions list, which takes paying off the table.
+        // Its own stream, so it doesn't shift any other draw.
+        gang: { name: pick(["Night Ledger", "GreyTide", "LockBlossom", "Cold Harbor", "Static Choir"]), sanctioned: FT.rng.fork("sanctions")() < .25 }
       }, st.newState());
       FT.years.applyStart(state, FT.years.pickStart(STARTS, mode.prefs.start));
       FT.years.applyConditions(state, FT.years.pickConditions(CONDITIONS.filter(c => !(st.excludeConditions || []).includes(c.id)), 2));
@@ -260,8 +371,11 @@
           const star = p.skill === a.skill ? " ★" : "";
           const prog = a.kind === "project" ? ` (${S.proj[a.id] !== undefined ? `${fmt(S.proj[a.id])} of ${a.work} person-months done` : `${a.work} person-months`})` : "";
           const cost = upfront(a.id) ? `, ${money(upfront(a.id))}` : "";
-          const blocked = upfront(a.id) > left && current !== a.id;
-          return `<option value="${a.id}" ${current === a.id ? "selected" : ""} ${blocked ? "disabled" : ""}>${a.name}${star}${prog}${cost}</option>`;
+          // Only tasks that cost money can be unaffordable: free tasks, and projects
+          // already paid for, stay available even when the budget is negative
+          const blocked = upfront(a.id) > 0 && upfront(a.id) > left && current !== a.id;
+          const tip = a.desc ? ` title="${a.desc.replace(/"/g, "&quot;")}"` : "";
+          return `<option value="${a.id}"${tip} ${current === a.id ? "selected" : ""} ${blocked ? "disabled" : ""}>${a.name}${star}${prog}${cost}</option>`;
         };
         const up = acts.filter(a => a.kind === "upkeep" && visible(a)).map(opt).join("");
         const pr = acts.filter(a => projectOpen(a) && visible(a)).map(opt).join("");
@@ -285,7 +399,7 @@
             <div class="mslots">${selects}</div>
             ${p.id === "you" || p.newHire ? "" : `<label class="ot"><input type="checkbox" data-ot="${p.id}" ${overtime[p.id] ? "checked" : ""}> Ask for overtime: one more task, a lot more burnout</label>`}</div>`;
         }).join("");
-        const notices = S.notices.map(n => `<div class="notice">${n}</div>`).join("") +
+        const notices = S.notices.map(n => `<div class="notice">${n}</div>`).join("") + (S.budget < 0 ? `<div class="notice"><b>Over budget.</b> Free tasks and projects you’ve already paid for can still be assigned. Anything that costs money waits until the budget recovers.</div>` : "") +
           (S.interrupts.length ? `<div class="notice"><b>Unplanned work:</b> ${S.interrupts.length === 1 ? "one task slot is" : `${S.interrupts.length} task slots are`} already taken this month. ${S.tutorial && !S.seenInterrupt ? "This happens most months: audits, outages and urgent requests don’t wait for your plan. Leave some slack for it." : ""}</div>` : "");
         if (S.interrupts.length) S.seenInterrupt = true;
         const tut = st.tutorial, tips = tut.tips, guided = S.tutorial && S.month === 0 && S.tip < tips.length;
@@ -298,11 +412,11 @@
             ${last ? `<button class="btn ghost" id="tipfill">Fill in your suggestion</button>` : `<button class="mini" id="tipskip">Skip tips</button>`}
             <span class="hint">${S.tip + 1} of ${tips.length}</span></div>`, "tut");
         } else if (S.month === 0) orient = ui.advisor(`<p><b>${st.chief}:</b> ${st.orientation}</p>`);
-        else if (S.tutorial && tut.monthNotes[S.month]) orient = ui.advisor(`<p><b>${st.chief}:</b> ${tut.monthNotes[S.month]}</p>`);
+        else if (S.tutorial && (tut.monthNotes[S.month] || sharedNote(S.month))) orient = ui.advisor(`<p><b>${st.chief}:</b> ${tut.monthNotes[S.month] || sharedNote(S.month)}</p>`);
         const spot = name => target === name ? "spot" : "";
         FT.app.innerHTML = ui.header() + `<div class="panel">
           <h2>${mode.months[S.month]}: ${mode.landmarks[S.month]}</h2>
-          ${S.month === 0 ? FT.years.notice() : ""}${st.threatWarning(S)}${notices}${orient}
+          ${S.month === 0 ? FT.years.notice() : ""}${mode.threatWarning(S)}${notices}${orient}
           <div class="${spot("dash")}">${ui.dashboard()}</div>
           <div class="${spot("team")}">
           <p>Assign this month’s work. ★ marks someone’s specialty: they do it about 40% better. Projects are measured in person-months, so a specialist finishes sooner, and they pay off only when finished.</p>
@@ -333,17 +447,66 @@
 
     dashboard(S) {
       const rows = mode.setting.dashboard(S);
+      // Controls every setting relies on get a row, unless the setting already shows them
+      const skip = mode.setting.skipRows || [];
+      for (const sr of SHARED_ROWS) {
+        if (skip.includes(sr.key) || (sr.when && !sr.when(S))) continue;
+        if (rowsDependOn(() => mode.setting.dashboard(S), sr.key).length) continue;
+        rows.push(sr.row(S));
+      }
       for (const a of mode.actions) if (a.kind === "project" && S.proj[a.id] !== undefined)
         rows.push([a.name, "warn", `In progress: ${fmt(S.proj[a.id])} of ${a.work} person-months`]);
       return rows;
     },
 
-    threatWarning(S) { return mode.setting.threatWarning(S); },
+    // "Improve it with": the visible tasks that change the state behind a status row
+    improveHints() {
+      const visible = a => (!a.show || a.show(S)) && !(a.kind === "project" && S.done[a.id]);
+      const acts = mode.actions.filter(visible), hints = {};
+      const vars = new Set();
+      for (const a of acts) for (const v of actionVars(a)) vars.add(v);
+      for (const v of vars) for (const label of rowsDependOn(() => mode.dashboard(S), v)) {
+        hints[label] = hints[label] || [];
+        for (const a of acts) if (actionVars(a).includes(v) && !hints[label].includes(a.name)) hints[label].push(a.name);
+      }
+      return hints;
+    },
+
+    threatWarning(S) {
+      const w = mode.setting.threatWarning(S);
+      if (!w || !S.gang.sanctioned) return w;
+      return w + `<div class="intel"><b>Also:</b> the ${S.gang.name} gang is on the US Treasury’s sanctions list. Paying them a ransom could be illegal, and insurers won’t cover it. If they hit you, paying won’t be an option.</div>`;
+    },
+
+    /* ---------- Multi-factor coverage ----------
+     * S.mfa says it was rolled out; S.mfaCover says how much of it is still true. */
+    // Is this particular account covered? An attack on one account rolls against coverage.
+    mfaOn() { return S.mfa && (S.mfaCover >= 100 || chance(S.mfaCover / 100)); },
+    // Close enough to "everywhere" to tick the box on a questionnaire or renewal
+    mfaFull() { return S.mfa && S.mfaCover >= 80; },
+    // Odds that holds against a stolen password, scaled by coverage
+    mfaP(on, off) { return S.mfa ? off + (on - off) * S.mfaCover / 100 : off; },
+    // When MFA was rolled out but this account slipped through, say so
+    mfaGap(r) { if (S.mfa) { r.text += " Multi-factor login had been rolled out, but this account had slipped through a gap: never enrolled, or exempted “temporarily.”"; L.set(...mode.mfaLesson); } return r; },
+    mfaLesson: ["Multi-factor coverage", "Multi-factor login decays like everything else. New hires skip enrolling and exceptions pile up, and attackers look for exactly those accounts."],
+    // Status text: "On for everyone" until coverage slips, then the percentage
+    mfaRow(label, on, strong) {
+      const c = S.mfaCover;
+      if (!S.mfa) return null;
+      const text = c >= 95 ? (S.mfaStrong ? strong : on) : `${S.mfaStrong ? "Phishing-resistant" : "On"} for ${c}% of accounts`;
+      return [label, c >= 85 ? "good" : c >= 60 ? "warn" : "bad", text];
+    },
 
     monthEnd(S) {
       mode.setting.monthEnd(S);
+      // Multi-factor coverage slips: new hires skip enrolling, exceptions pile up. Slower than patching.
+      if (S.mfa) S.mfaCover = clamp(S.mfaCover - Math.round((mode.setting.mfaDrift || 4) * S.diff.decay));
       if (S.mdrRamp && S.month >= S.mdrMonth) { S.mdr = 85; S.mdrRamp = false; }
       S.notices = [];
+      // Good detection or a tuned MDR service sometimes catches access left behind
+      const watch = S.mdr !== null && S.mdr !== undefined && !S.mdrNoisy;
+      for (const x of mode.sweep(Math.max(0, (S.detect || 0) / 400) + (watch ? .12 : 0)))
+        S.notices.push(`<b>Caught late:</b> ${watch ? "the monitoring service" : "a detection rule"} spotted someone still using ${x.what}, left over from ${x.month}. It’s shut down now.`);
       for (const p of S.team) {
         if (p.away) {
           p.away--;

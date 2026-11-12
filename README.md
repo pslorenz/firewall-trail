@@ -20,7 +20,7 @@ Every setting ends with ransomware night, where you make the calls live. Three d
 
 - **Yearly conditions:** two per year, good and bad, like a budget freeze, a hot job market, a ransomware wave or board backing.
 - **Starting situations** (practitioner and leadership): a typical program, an inherited mess, a mature program, or a brand-new function.
-- **Year codes:** every year has a code like `PHNT-K7F3Q`. Enter it on the title screen to play that exact year: same conditions, same starting point, same events in the same order. Good for comparing notes or running the same scenario in a workshop.
+- **Year codes:** every year has a code like `PHNT-K7F3Q-2`. Enter it on the title screen to play that exact year: same conditions, same starting point, same events in the same order. The number at the end is the rules version: when an update changes how a mode plays, its version goes up, and a code from an older version still loads but says it may play out differently. Good for comparing notes or running the same scenario in a workshop.
 - **Achievements** across the modes, saved in your browser.
 - **Year reports:** a printable summary of your year, with a timeline of every decision, that you can save as a PDF.
 - **Feedback:** the feedback links open a GitHub issue pre-filled with your year code, mode and result, so any report can be replayed exactly.
@@ -78,9 +78,15 @@ Events can read and change the game state `S` (for example `S.patch`, `S.mfa`, `
 
 **Minigame content:** add emails, login pages or password questions to the lists in a mode's `minigames.js`.
 
+**Ransomware night in practitioner mode:** tag a setting's phishing vector with `kind: "phish"` so multi-factor login and phishing-resistant sign-in change its odds and wording. A setting can override the default wording of the first hour (how the response is coordinated, with or without an incident plan) with `finale.firstHour`, and of the phishing lines with `finale.phish`; and of the leak-site step with `finale.leak`; see the defaults at the top of `modes/practitioner/finale.js`. When an event's outcome means an attacker got in and may still be there, wrap the outcome in `mode.foothold("what they left behind", { text, fx, lesson })`: the access stays hidden until a threat hunt or a detection finds it, and on ransomware night it's the first thing the attackers try. Every status row should have a task that improves it: the status board's “What do these mean?” lists the tasks for each row, worked out from what each task's code changes (or from its `improves: [...]` list). A setting can rename or hide a shared task with `baseOverrides`.
+
 **A new practitioner setting:** copy `modes/practitioner/hospital.js`, change its `id` and content, and add it to `index.html` after `hospital.js`.
 
 **A new mode:** copy `modes/student/` as a starting point, change the `id`, and add its scripts to `index.html`.
+
+## Testing
+
+Run `npm install`, `npx playwright install chromium`, then `npm test`. The checks play every mode and setting start to finish, stress-test ransomware night, and confirm year codes replay exactly. See [tests/README.md](tests/README.md). If a change makes existing year codes play differently, bump the mode's `rulesVersion`.
 
 ## License
 

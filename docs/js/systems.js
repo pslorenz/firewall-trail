@@ -23,5 +23,10 @@
   function mdrCatch() { return S.mdr !== null && chance(S.mdr / 100); }
   function backupsGood() { return S.backupTested && S.backupAge <= 2; }
 
-  FT.sys = { eff, notes, filterCatch, edrCatch, mdrCatch, backupsGood };
+  // How much phishing training cuts the odds someone falls for a targeted phish.
+  // It levels off at 50%: some people will always click, so the filter and MFA have to carry the rest.
+  function awareness(S) { return Math.min(.5, (S.training || 0) / 100 * .8); }
+  // The same cap for "does someone click?": training can remove at most about 60% of the risk
+  function clickChance(S, base) { return base * (1 - Math.min(.625, (S.training || 0) / 100)); }
+  FT.sys = { eff, notes, filterCatch, edrCatch, mdrCatch, backupsGood, awareness, clickChance };
 })();

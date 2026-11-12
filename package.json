@@ -1,0 +1,12 @@
+{
+  "name": "firewall-trail",
+  "private": true,
+  "description": "An Oregon Trail style cybersecurity game. The game itself needs no build step; this file only sets up the automated checks.",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node tests/run.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.0"
+  }
+}

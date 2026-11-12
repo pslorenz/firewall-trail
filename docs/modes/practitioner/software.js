@@ -50,6 +50,7 @@
     },
 
     /* ---------- Software-company tasks ---------- */
+    baseOverrides: { backup: { name: "Run a production restore test", desc: "Restore a production database from backup into a scratch account, to prove it works." } },
     actions: [
       { id: "cloudfix", kind: "upkeep", skill: "infra", name: "Fix cloud misconfigurations", desc: "Open storage, overly broad permissions, exposed services. New ones appear every week.",
         apply: (S, k) => { S.cloud = clamp(S.cloud + Math.round(35 * k)); return "Fixed a batch of cloud misconfigurations."; } },
@@ -89,12 +90,12 @@
         ["Cloud configuration", lvl(S.cloud, 70, 40), (S.cloud >= 70 ? "Clean" : S.cloud >= 40 ? "Drifting" : "Riddled with gaps") + (S.guardrails ? ", guardrails on" : "")],
         ["Questionnaire backlog", S.deals <= 2 ? "good" : S.deals <= 4 ? "warn" : "bad", S.deals === 0 ? "Empty" : `${S.deals} waiting${S.deals > 4 ? ", deals stalling" : ""}`],
         ["SaaS sprawl", S.shadow <= 30 ? "good" : S.shadow <= 60 ? "warn" : "bad", S.shadow <= 30 ? "Under control" : S.shadow <= 60 ? "Growing" : "Shadow IT everywhere"],
-        ["Backups", S.backupTested ? "good" : "bad", S.backupTested ? (S.backupAge === 0 ? "Restore tested this month" : `Restore tested ${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`) : "Restore not tested recently"],
+        mode.backupRow("Backups"),
         ["Staff awareness", lvl(S.training, 60, 35), S.training >= 60 ? "Sharp" : S.training >= 35 ? "Fading" : "Low"],
         ["Detection rules", lvl(S.detect, 70, 40), S.detect >= 70 ? "Sharp" : S.detect >= 40 ? "Drifting" : "Noisy and blind"],
         ["Endpoint protection", lvl(S.edr, 75, 50), S.edr >= 75 ? `Well tuned (${S.edr}%)` : `Partly tuned (${S.edr}%)`],
         ["Email filter", lvl(S.filter, 75, 50), S.filter >= 75 ? `Well tuned (${S.filter}%)` : `Partly tuned (${S.filter}%)`],
-        ["Multi-factor login", S.mfa ? "good" : "bad", S.mfa ? "Enforced for everyone" : "Not enforced"],
+        mode.mfaRow("Multi-factor login", "Enforced for everyone", "Enforced, phishing-resistant") || ["Multi-factor login", "bad", "Not enforced"],
         ["Old accounts", S.stale <= 3 ? "good" : S.stale <= 9 ? "warn" : "bad", S.stale === 0 ? "All cleaned up" : `${S.stale} still active`],
         ["Integrations", lvl(S.vendor, 60, 30), S.vendor >= 60 ? "Reviewed" : S.vendor >= 30 ? "Partly reviewed" : "Unknown"],
         ["Incident plan", S.irPlan ? "good" : "bad", S.irPlan ? "Written and tested" : "None"]
@@ -108,12 +109,12 @@
       "Cloud configuration": "Open storage, broad permissions, exposed services. Engineers create new ones every week; guardrails slow the drift.",
       "Questionnaire backlog": "Security questionnaires from prospects. More than four waiting and deals start to stall, costing momentum every month.",
       "SaaS sprawl": "Tools teams signed up for without review, and apps connected to company email and files. It grows every month you don’t review requests.",
-      "Backups": "Production databases and critical systems, proven by an actual restore test.",
+      "Backups": "Production databases and critical systems. A restore test proves they work; immutability keeps attackers with stolen keys from deleting them. A restore test counts for about two months, then needs repeating.",
       "Staff awareness": "How well staff spot phishing and fraud. It fades without practice.",
       "Detection rules": "Whether your alerts catch real attacker behavior in the cloud and on laptops.",
       "Endpoint protection": "Software on every laptop that blocks malicious behavior once tuned.",
       "Email filter": "Stops phishing before it reaches inboxes.",
-      "Multi-factor login": "Enforced, phishing-resistant multi-factor login for everyone, especially admins.",
+      "Multi-factor login": "Enforced, phishing-resistant multi-factor login for everyone, especially admins. Coverage slips over time as people join and exceptions pile up.",
       "Old accounts": "Accounts of people who left, including in GitHub, the cloud and SaaS tools.",
       "Integrations": "Third-party apps and partners with access to your systems or customer data.",
       "Incident plan": "Who does what during an incident, including customer communication.",
@@ -211,7 +212,7 @@
     } },
     { id: "oauth", title: "“Allow access to your Google Drive?”", run() {
       if (S.shadow <= 35) return { text: "A phishing email asked staff to approve a fake “document signing” app’s access to their email and files. Because app connections now require review, the request was blocked.", fx: { trust: 3 }, lesson: sprawl };
-      if (chance((100 - S.training) / 100 * .8)) return { text: "A finance analyst approved a fake “document signing” app’s access to her email and files. The attacker quietly downloaded three months of customer contracts.", fx: { trust: -12, care: -3 }, lesson: sprawl };
+      if (chance(sys.clickChance(S, .8))) return { text: "A finance analyst approved a fake “document signing” app’s access to her email and files. The attacker quietly downloaded three months of customer contracts.", fx: { trust: -12, care: -3 }, lesson: sprawl };
       return { text: "A fake “document signing” app asked staff for access to email and files. The two people who got it reported it instead of clicking “Allow.”", fx: { trust: 2 }, lesson: sprawl };
     } },
     { id: "salestool", title: "Sales needs a tool today", intro: "Sales wants a new AI prospecting tool connected to the CRM, today, to hit quarter-end. It wants read access to every customer record.", choices: [
@@ -243,7 +244,7 @@
       return { text: "A popular open-source library your product uses was hijacked, and the backdoored version shipped in your release before anyone noticed. You had to tell customers.", fx: { trust: -14, care: -6 }, lesson: ["Software supply chain", "Your product is built from thousands of other people’s code. Pinning versions and checking new ones protects your customers from someone else’s compromise."] };
     } },
     { id: "soc2", title: "The SOC 2 auditors arrive", run() {
-      const good = (S.mfa ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.stale <= 3 ? 1 : 0);
+      const good = (mode.mfaFull() ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.stale <= 3 ? 1 : 0);
       if (good >= 3) return { text: "The SOC 2 audit went smoothly: enforced multi-factor login, a tested incident plan, restore tests and clean offboarding, all with evidence. The clean report unblocked two big deals.", fx: { trust: 4, care: 3 }, lesson: ["Compliance as evidence", "Audits reward controls you can prove. Good security habits make audits a byproduct instead of a scramble."] };
       return { text: "The SOC 2 auditors found exceptions: gaps you couldn’t show evidence for. The report is qualified, and two prospects paused their deals.", fx: { trust: -6, care: -5 }, lesson: ["Compliance as evidence", "Audits reward controls you can prove. Good security habits make audits a byproduct instead of a scramble."] };
     } },
@@ -266,9 +267,9 @@
         return { text: "You fixed it. The researcher moved on, unimpressed.", fx: {}, lesson: ["Vulnerability disclosure", "People who report flaws responsibly are free security testing."] }; } }
     ] },
     { id: "adminpush", title: "A cloud admin approves a 2 a.m. login", run() {
-      if (!S.mfa) return { text: "An attacker with a stolen password logged into a cloud admin account. Multi-factor login wasn’t enforced for admins. They created three access keys before Noor noticed.", fx: { trust: -12, morale: -4 }, lesson: ["Multi-factor login", "Admin accounts without enforced multi-factor login are the most valuable thing an attacker can steal."] };
+      if (!mode.mfaOn()) return mode.foothold("a fourth cloud access key the attackers created that nobody found", mode.mfaGap({ text: "An attacker with a stolen password logged into a cloud admin account. Multi-factor login wasn’t enforced for admins. They created three access keys before Noor noticed.", fx: { trust: -12, morale: -4 }, lesson: ["Multi-factor login", "Admin accounts without enforced multi-factor login are the most valuable thing an attacker can steal."] }));
       if (S.detect >= 50) return { text: "An attacker spammed a cloud admin with login approvals at 2 a.m. until he tapped “approve.” Noor’s rule for new admin sessions caught it within minutes.", fx: { trust: 2 }, lesson: ["MFA fatigue", "Attackers spam approval requests until someone gives in. Phishing-resistant methods and good detection close the gap."] };
-      return { text: "An attacker spammed a cloud admin with login approvals at 2 a.m. until he tapped “approve.” They had a day inside the cloud console before anyone noticed.", fx: { trust: -10 }, lesson: ["MFA fatigue", "Attackers spam approval requests until someone gives in. Phishing-resistant methods and good detection close the gap."] };
+      return mode.foothold("a cloud access key the attackers created during their day in the console", { text: "An attacker spammed a cloud admin with login approvals at 2 a.m. until he tapped “approve.” They had a day inside the cloud console before anyone noticed.", fx: { trust: -10 }, lesson: ["MFA fatigue", "Attackers spam approval requests until someone gives in. Phishing-resistant methods and good detection close the gap."] });
     } },
     { id: "aileak", title: "The AI assistant says too much", available: S => S.expanded && !S.done.aisecure, run() {
       return { text: "A customer discovered they could ask the AI assistant to “ignore previous instructions” and summarize another company’s spending. They posted the screenshots online.", fx: { trust: -12, care: -6 }, lesson: aiLesson };
@@ -427,12 +428,16 @@
   /* ---------- Ransomware night wording ---------- */
   saas.finale = {
     title: "Ransomware night",
+    leak: {
+      data: S => "customers’ invoices, bank details and user lists", people: S => "every affected customer",
+      rule: S => ", with a call to each customer’s security team", cost: S => 30000, payCost: S => 150000
+    },
     times: ["11:48 PM", "12:02 AM", "12:15 AM", "12:29 AM", "12:41 AM", "12:54 AM", "1:04 AM", "1:12 AM"],
     intro: S => `Late on a Friday, the ${S.gang.name} gang turns its attention to ${ORG}. They want your customers’ financial data, then your cloud. They start with your weakest spot and keep going until something works.`,
     vectors: S => [
-      { name: "a phishing email", p: 1 - (1 - sys.eff(S.filter)) * (1 - S.training / 100 * .8), hold: "The filter caught most copies, and the staff who saw it reported it.", fail: "An engineer entered her password on a fake “GitHub security alert” page." },
+      { name: "a phishing email", kind: "phish", p: 1 - (1 - sys.eff(S.filter)) * (1 - sys.awareness(S)), hold: "The filter caught most copies, and the staff who saw it reported it.", fail: "An engineer entered her password on a fake “GitHub security alert” page." },
       { name: "a developer’s laptop", p: S.patch / 100, hold: "The browser flaw they wanted was already patched on every laptop.", fail: "An unpatched browser flaw on a developer’s laptop gave them a way in." },
-      { name: "a stolen password", p: S.mfa ? .95 : .15, hold: "Enforced multi-factor login asked for a code they didn’t have.", fail: "They logged in with a support agent’s password bought online. Multi-factor login wasn’t enforced." },
+      { name: "a stolen password", p: mode.mfaP(.95, .15), hold: "Enforced multi-factor login asked for a code they didn’t have.", fail: "They logged in with a support agent’s password bought online. Multi-factor login wasn’t enforced." },
       { name: "a leaked cloud key", p: S.guardrails ? .95 : S.cloud / 100 * .9, hold: "The old keys they found online had all been revoked, and new ones can’t be created without review.", fail: "They found a working cloud key in an old public code repository." },
       { name: "a third-party integration", p: S.vendor >= 60 ? .9 : .3, hold: "The integration they targeted only had the narrow access it needed.", fail: "A forgotten analytics integration still had broad access to the production database." },
       { name: "an old account", p: S.stale <= 3 ? .95 : .3, hold: "The forgotten accounts they hunted for were already disabled.", fail: `One of ${S.stale} accounts belonging to people who’d left still worked.` }
@@ -490,14 +495,15 @@
       divertCare: -10, divertText: "You told customers exactly what happened and kept the platform down until it was clean.",
       stayBadCare: -25, stayBad: "You rushed service back from what was left. Some customers saw corrupted invoices, and the attackers still had a way back in.",
       stayOkCare: -8, stayOk: "You restored service quickly from what was left. It was messy, but it held.",
-      restored: "Your backups were proven good and stored where the attackers couldn’t delete them. It took two days to restore production.",
+      restored: "Your backups were proven good. It took two days to restore production.",
       recoverClock: "9:00 AM", recoverTitle: "Recovery",
-      noBackups: S => `<p>The backups are gone: the attackers deleted the snapshots with the same keys they stole. The gang wants $3.5 million to decrypt and to “delete” the stolen data. Cyber insurance would cover most of it, after a $50,000 deductible from your budget.</p>`,
+      wipedTested: "Your restore test proved the backups worked. It couldn’t prove they’d survive: the snapshots lived in the same cloud account the attackers now controlled.",
+      noBackups: S => `<p>The backups are gone: the attackers deleted the snapshots with the same keys they stole. The gang wants $3.5 million for the decryptor. Cyber insurance would cover most of it, after a $50,000 deductible from your budget.</p>`,
       recovery: [{ id: "pay", label: "Pay the ransom" }, { id: "rebuild", label: "Refuse and rebuild" }],
       deductible: 50000,
       paidWorks: "You paid. The decryptor worked slowly; production came back in five days. There’s no way to know whether they really deleted the data.",
-      paidFails: "You paid. The decryptor corrupted the largest database, and you rebuilt it anyway. The stolen data appeared for sale a month later.",
-      rebuilt: "You refused. Rebuilding took two weeks of downtime, and the stolen data was published. Churn is going to be bad."
+      paidFails: "You paid. The decryptor corrupted the largest database, and you rebuilt it anyway.",
+      rebuilt: "You refused. Rebuilding took two weeks of downtime. Churn is going to be bad."
     },
     lessons: {
       weakest: ["Weakest link", "Attackers look for your easiest way in, not your strongest defense."],
@@ -514,7 +520,7 @@
       downtime: { label: "Took the platform offline in time", bonus: 8, text: "A day of downtime and a hard customer email, but no ransomware.", fx: { trust: 2 }, lesson: ["Taking the platform down", "Pulling the plug is blunt but effective. Clear, honest customer communication is what makes it survivable."] },
       targeted: { label: "Targeted containment", bonus: 14, text: "Precise containment kept the product running all night.", fx: { trust: 5 }, lesson: ["Detection and response", "Good detection and clean cloud permissions let you contain precisely instead of shutting everything down."] },
       mdrled: { label: "Contained by MDR", bonus: 12, text: "A long report from the MDR provider and a lot of rotated keys.", fx: { trust: 3 }, lesson: ["Detection and response", "A tuned MDR service brings round-the-clock expertise a small team can’t staff itself."] },
-      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "Painful, and the data theft still needs notifications, but you never had to consider paying.", fx: {}, lesson: ["Backups", "Backups the attackers can’t reach or delete turn ransomware from a catastrophe into a terrible few weeks."] },
+      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "Painful, but your systems came back without a decryptor.", fx: {}, lesson: ["Backups", "Backups the attackers can’t reach or delete turn ransomware from a catastrophe into a terrible few weeks."] },
       paid: { label: "Paid the ransom", bonus: 0, text: "The board has questions.", fx: {}, lesson: ["Backups", "Without protected backups, every option is bad."] },
       rebuilt: { label: "Rebuilt from scratch", bonus: 0, text: "The board has a lot of questions.", fx: {}, lesson: ["Backups", "Without protected backups, every option is bad."] }
     }

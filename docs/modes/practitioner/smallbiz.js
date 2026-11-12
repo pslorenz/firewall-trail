@@ -76,6 +76,8 @@
     short: "Small business",
     summary: "A medical practice, a machine shop or a software startup. No security team: just you, a few hours a month, and some outside help.",
     replaceBase: true,
+    mfaDrift: 3, // a dozen accounts drift more slowly than a hospital’s thousands
+    skipRows: ["filter"], // the built-in security row covers email filtering here
     noGenericInterrupts: true,
     hideSkills: true,
     excludeConditions: ["leave", "jobs"],
@@ -100,7 +102,7 @@
       return {
         kind, notices: [k.briefing],
         builtin: 30, payRule: false, admins: 25, insured: false, immutable: false,
-        patch: 40, backupAge: 6, backupTested: false, training: 25, detect: 15, edr: 30, filter: 40, vendor: 25, stale: 6, inventory: 20, mfa: false, irPlan: false,
+        patch: 40, backupAge: 6, backupTested: false, training: 25, detect: 15, edr: 30, filter: 40, vendor: 25, stale: 6, inventory: 20, mfa: false, mfaStrong: false, irPlan: false,
         team: [
           { id: "you", name: "You", role: k.seat, skill: "lead", cap: 3, burnout: 30 },
           { id: "helper", name: k.helper, role: k.helperRole, skill: "infra", cap: 1, burnout: 0, vendor: true }
@@ -128,14 +130,24 @@
         apply: S => { S.backupAge = 0; S.backupTested = true; return "Restored a test file from backup. It worked."; } },
       { id: "scams", kind: "upkeep", skill: "lead", name: "Talk to staff about scams", desc: "Ten minutes at the staff meeting: fake invoices, gift cards, fake logins.",
         apply: (S, k) => { S.training = clamp(S.training + Math.round(25 * k)); return "Walked staff through the latest scams at the staff meeting."; } },
-      { id: "accounts", kind: "upkeep", skill: "lead", name: "Clean up old accounts and shared passwords", desc: "People who left, shared logins, the password on the sticky note.",
-        apply: S => { const n = S.stale; S.stale = 0; return n ? `Closed ${n} old accounts and changed the shared passwords.` : "Checked for old accounts. All clean."; } },
+      { id: "accounts", kind: "upkeep", skill: "lead", name: "Clean up old accounts and shared passwords", desc: "People who left, shared logins, the password on the sticky note, and anything still signed in that shouldn’t be.",
+        apply: S => { const n = S.stale; S.stale = 0; const gone = mode.sweep(.5); return (n ? `Closed ${n} old accounts and changed the shared passwords.` : "Checked for old accounts. All clean.") + mode.sweepText(gone); } },
       { id: "admins", kind: "upkeep", skill: "infra", name: "Take away everyday admin rights", desc: "Staff shouldn’t be able to install anything on their computers.",
         apply: (S, k) => { S.admins = clamp(S.admins + Math.round(30 * k)); return "Removed admin rights from everyday accounts."; } },
       { id: "contract", kind: "upkeep", skill: "lead", name: "Review what your outside help covers", desc: "What’s in the contract, what costs extra, and who does what in an emergency.",
         apply: (S, k) => { S.vendor = clamp(S.vendor + Math.round(35 * k)); return "Sat down with your outside help and wrote down who does what."; } },
+      { id: "inventory", kind: "upkeep", skill: "lead", name: "Update the list of devices and accounts", desc: "Every computer, phone and account, and who has it. You can’t protect, or unplug, what you don’t know about.",
+        apply: (S, k) => { S.inventory = clamp(S.inventory + Math.round(35 * k)); return "Updated the list of every computer, phone and account, and who has each one."; } },
+      { id: "tunemdr", kind: "upkeep", skill: "infra", name: "Have the monitoring tuned", desc: "Get the monitoring service to learn what normal looks like here, so its alerts mean something.", show: S => S.mdr !== null && S.mdrNoisy && S.mdr < 60,
+        apply: (S, k) => { S.mdr = Math.min(60, S.mdr + Math.round(12 * k)); if (S.mdr >= 55) S.mdrNoisy = false; return "Had the monitoring service tuned. Fewer, clearer alerts."; } },
+      { id: "mdrbuy", kind: "project", skill: "infra", cost: 4000, work: 1, show: S => S.mdr === null && S.month > S.mdrMonth, name: "Add 24/7 monitoring after all", desc: "Outside analysts watching your computers around the clock, properly set up. Plus $250 a month.",
+        done: S => { S.mdr = 40; S.mdrRamp = true; S.mdrNoisy = false; S.monthlyFees = (S.monthlyFees || 0) + 250; return "Monitoring is set up. They’ll know what normal looks like by next month. It adds $250 a month."; } },
       { id: "mfa", kind: "project", skill: "lead", cost: 0, work: 2, name: "Turn on MFA for email and banking", desc: "A phone prompt on every email account and the bank. Expect complaints.",
-        done: S => { S.mfa = true; return "Multi-factor login is on for every email account and the bank."; } },
+        done: S => { S.mfa = true; S.mfaCover = 100; return "Multi-factor login is on for every email account and the bank."; } },
+      { id: "mfagaps", kind: "upkeep", skill: "lead", show: S => S.mfa && S.mfaCover < 100, name: "Check MFA is on for everyone", desc: "New staff, new accounts, and anyone who asked to skip it “just for now.”",
+        apply: (S, k) => { S.mfaCover = clamp(S.mfaCover + Math.round(40 * k)); return `Checked every account and switched MFA back on where it had lapsed. Coverage is ${S.mfaCover}%.`; } },
+      { id: "passkeys", kind: "project", skill: "lead", cost: 600, work: 1, show: S => S.mfa, name: "Switch email and bank logins to passkeys", desc: "Passkeys or security keys instead of phone prompts. A fake sign-in page gets nothing it can use.",
+        done: S => { S.mfaStrong = true; return S.ownerExempt ? "Everyone signs in with passkeys now, except the owner, who is still exempt from multi-factor login." : "Everyone signs in to email and the bank with passkeys now. Fake sign-in pages get nothing they can use."; } },
       { id: "payrule", kind: "project", skill: "lead", cost: 0, work: 1, name: "Set up a payment verification rule", desc: "Any change to bank details gets a phone call to a known number, every time.",
         done: S => { S.payRule = true; return "The payment verification rule is in place, and the bookkeeper knows it’s not optional."; } },
       { id: "edr", kind: "project", skill: "infra", cost: 3000, work: 1, name: "Add managed endpoint protection", desc: "Proper protection on every computer, watched by your outside help. Plus a monthly fee.",
@@ -164,10 +176,11 @@
       const lvl = (v, g, o) => v >= g ? "good" : v >= o ? "warn" : "bad";
       return [
         ["Built-in security", lvl(S.builtin, 70, 40), S.builtin >= 70 ? "Switched on" : S.builtin >= 40 ? "Partly on" : "Mostly off"],
-        ["MFA on email and bank", S.mfa ? "good" : "bad", S.mfa ? "On" : "Off"],
+        mode.mfaRow("MFA on email and bank", "On", S.ownerExempt ? "Passkeys, except the owner" : "Passkeys") || ["MFA on email and bank", "bad", "Off"],
         ["Payment verification", S.payRule ? "good" : "bad", S.payRule ? "Callback rule in place" : "None"],
         ["Updates", lvl(S.patch, 70, 40), S.patch >= 70 ? "Current" : S.patch >= 40 ? "Falling behind" : "Badly behind"],
-        ["Backups", S.backupTested ? "good" : "bad", (S.backupTested ? (S.immutable ? "Immutable, cloud" : `Restore tested ${S.backupAge === 0 ? "this month" : `${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`}`) : "Not tested recently")],
+        // Same rule as the other settings: tested and immutable is good, either one alone is a warning
+        ["Backups", S.immutable ? "good" : S.backupTested ? "warn" : "bad", S.immutable ? "Immutable, cloud" : S.backupTested ? `Restore tested ${S.backupAge === 0 ? "this month" : `${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`}, can be deleted` : "Not tested recently"],
         ["Endpoint protection", lvl(S.edr, 75, 50), S.edr >= 75 ? "Managed" : "Basic antivirus"],
         ["Staff scam awareness", lvl(S.training, 60, 35), S.training >= 60 ? "Sharp" : S.training >= 35 ? "Fading" : "Low"],
         ["Admin rights", lvl(S.admins, 70, 40), S.admins >= 70 ? "Restricted" : S.admins >= 40 ? "Mostly restricted" : "Everyone is admin"],
@@ -179,10 +192,11 @@
     },
     explain: {
       "Built-in security": "Protections already included in your email and office software, like blocking risky sign-ins and suspicious attachments. Often switched off by default.",
-      "MFA on email and bank": "A phone prompt on top of the password. The single most effective thing a small business can do.",
+      "MFA on email and bank": "A phone prompt on top of the password. The single most effective thing a small business can do. Check it now and then: new staff and new accounts don’t turn it on by themselves.",
       "Payment verification": "A rule that any change to bank details gets a phone call to a known number. It stops the most expensive small-business fraud.",
       "Updates": "Windows, browsers, the router and the firewall.",
-      "Backups": "Only proven by an actual restore. Immutable cloud backups can’t be deleted by ransomware.",
+      "Backups": "Only proven by an actual restore, which counts for about two months. Immutable cloud backups can’t be deleted by ransomware.",
+      "Asset inventory": "A list of every computer, phone and account, and who has it. When something goes wrong at 2 a.m., it’s how you know what to unplug.",
       "Endpoint protection": "Basic antivirus versus managed protection someone is actually watching.",
       "Staff scam awareness": "How well staff spot fake invoices, gift card requests and fake logins. It fades without reminders.",
       "Admin rights": "Whether everyday accounts can install software. Most malware needs admin rights.",
@@ -245,8 +259,8 @@
       return { text: "An email from a regular supplier asked to send this month’s $38,000 payment to a new bank account. The bookkeeper updated it and paid. The supplier’s email had been hacked, and the money is gone.", fx: { trust: -14, care: -6, budget: -6000 }, lesson: bec };
     } },
     { id: "owneremail", title: "The owner’s email is hacked", run() {
-      if (S.mfa) return { text: `${K().ownerShort} entered a password on a fake sign-in page. Multi-factor login stopped the attacker cold.`, fx: { trust: 3 }, lesson: ["Multi-factor login", "For a small business, MFA on email is the single most effective control there is."] };
-      return { text: `${K().ownerShort} entered a password on a fake sign-in page. The attacker read two months of email and sent fake invoices to ${K().customers}.`, fx: { trust: -10, care: -8 }, lesson: ["Multi-factor login", "For a small business, MFA on email is the single most effective control there is."] };
+      if (mode.mfaOn()) return { text: `${K().ownerShort} entered a password on a fake sign-in page. Multi-factor login stopped the attacker cold.`, fx: { trust: 3 }, lesson: ["Multi-factor login", "For a small business, MFA on email is the single most effective control there is."] };
+      return mode.foothold("a sign-in session on the owner’s email that nobody ever signed out", mode.mfaGap({ text: `${K().ownerShort} entered a password on a fake sign-in page. The attacker read two months of email and sent fake invoices to ${K().customers}.`, fx: { trust: -10, care: -8 }, lesson: ["Multi-factor login", "For a small business, MFA on email is the single most effective control there is."] }));
     } },
     { id: "laptopcar", title: "A laptop stolen from a car", run() {
       if (S.builtin >= 60) return { text: "A laptop was stolen from an employee’s car. Disk encryption was switched on with the built-in features, so it was just a lost laptop.", fx: {}, lesson: ["Encryption", "Encryption is usually built in and free. It turns a stolen laptop from a breach into an inconvenience."] };
@@ -257,7 +271,7 @@
       return { text: "A former employee, still annoyed about leaving, logged in with an account nobody closed and deleted a year of shared files.", fx: { trust: -8, care: -6 }, lesson: ["Offboarding", "When someone leaves, close their accounts the same day, and change the passwords they knew."] };
     } },
     { id: "insurance", title: "The insurance renewal questionnaire", run() {
-      const good = (S.mfa ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.edr >= 75 ? 1 : 0);
+      const good = (mode.mfaFull() ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.edr >= 75 ? 1 : 0);
       if (good >= 2) return { text: "The insurance renewal asked about MFA, backups and endpoint protection. You could honestly say yes to most of it, and the premium held steady.", fx: { trust: 4 }, lesson: ["Insurers set the bar", "For many small businesses, the insurance questionnaire is the security program. It’s a decent checklist."] };
       return { text: "The insurance renewal asked about MFA, backups and endpoint protection. You couldn’t say yes to much. The premium jumped, and ransomware coverage was cut in half.", fx: { trust: -6, budget: -2000 }, lesson: ["Insurers set the bar", "For many small businesses, the insurance questionnaire is the security program. It’s a decent checklist."] };
     } },
@@ -305,7 +319,7 @@
       return { text: "A developer pushed a cloud access key to a public code repository. Attackers used it to run crypto-mining servers for a weekend. The bill was $9,000.", fx: { trust: -6, budget: -9000 }, lesson: ["Leaked secrets", "Keys pushed to public code are found by attackers within minutes. Free scanning tools catch them first."] };
     } },
     { id: "bigdeal", title: "A big customer’s security questionnaire", available: S => S.kind === "saas", run() {
-      const good = (S.mfa ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.admins >= 60 ? 1 : 0);
+      const good = (mode.mfaFull() ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.admins >= 60 ? 1 : 0);
       if (good >= 3) return { text: "Your biggest prospect sent a 200-question security questionnaire. You had honest answers for the important parts, and they signed.", fx: { care: 8, trust: 4 }, lesson: ["Security closes deals", "For a small software company, being able to answer a security questionnaire honestly is a sales asset."] };
       return { text: "Your biggest prospect sent a 200-question security questionnaire. Too many answers were “not yet.” They went with a competitor.", fx: { care: -6, trust: -4 }, lesson: ["Security closes deals", "For a small software company, being able to answer a security questionnaire honestly is a sales asset."] };
     } }
@@ -376,11 +390,30 @@
   /* ---------- Ransomware night ---------- */
   smb.finale = {
     title: "Ransomware night",
+    leak: {
+      data: S => `records about your ${K().customers}`, people: S => `your ${K().customers}`,
+      cost: S => 2000, payCost: S => S.insured ? 10000 : 40000
+    },
+    firstHour: {
+      planText: S => `You pull the one-page plan out of the supply closet and follow it: call ${K().helper} on the after-hours number, ${S.insured ? "call the insurer’s breach hotline, " : ""}and do everything from personal phones. Nobody has to think about who to call.`,
+      planUnseen: S => `Nobody saw them coming, but the one-page plan had ${K().helper}${S.insured ? " and the insurer’s breach hotline" : ""} on the phone at first light.`,
+      question: S => "There’s no incident plan. Who to call, in what order, and how to reach them at this hour, you’re working out as you go.",
+      hasInsurer: S => !!S.insured,
+      options: [
+        { id: "usual", label: "Email for help from the work account" },
+        { id: "phones", label: "Call around from your personal phone" },
+        { id: "insurer", label: "Call the insurer’s breach hotline first" }
+      ],
+      usualText: "You emailed for help from the work account, and got a quick reply.",
+      overheardText: "The attackers were reading that mailbox and moved as soon as the reply came in.",
+      phonesText: "You called around from your personal phone. It took a while to wake the right people.",
+      insurerText: "You called the insurer’s breach hotline first. Intake took an hour, but they had responders assigned before dawn."
+    },
     times: ["11:48 PM", "12:02 AM", "12:15 AM", "12:29 AM", "12:41 AM", "12:54 AM", "1:04 AM", "1:12 AM"],
     intro: S => `Late on a Saturday, the ${S.gang.name} gang turns its attention to ${K().org}. Small businesses are easy money: thin defenses, nobody watching at night. They start with your weakest spot and keep going until something works.`,
     vectors: S => [
-      { name: "a phishing email", p: 1 - (1 - sys.eff(S.filter)) * (1 - S.training / 100 * .8), hold: "The email filter caught most copies, and the one person who saw it forwarded it to you.", fail: "Someone entered their email password on a fake sign-in page." },
-      { name: "a stolen email password", p: S.mfa && !S.ownerExempt ? .95 : S.mfa ? .5 : .15, hold: "Multi-factor login asked for a code they didn’t have.", fail: S.ownerExempt ? "They went straight for the owner’s account, the one exempted from multi-factor login." : "A password from an old data breach still worked. There was no second factor." },
+      { name: "a phishing email", kind: "phish", p: 1 - (1 - sys.eff(S.filter)) * (1 - sys.awareness(S)), hold: "The email filter caught most copies, and the one person who saw it forwarded it to you.", fail: "Someone entered their email password on a fake sign-in page." },
+      { name: "a stolen email password", p: S.ownerExempt ? Math.min(.5, mode.mfaP(.95, .15)) : mode.mfaP(.95, .15), hold: "Multi-factor login asked for a code they didn’t have.", fail: S.ownerExempt ? "They went straight for the owner’s account, the one exempted from multi-factor login." : "A password from an old data breach still worked. There was no second factor." },
       { name: "old remote access", p: S.patch / 100, hold: "The old remote-access software they looked for was patched or gone.", fail: "An old, unpatched remote-access tool was still open to the internet." },
       { name: "an old account", p: S.stale <= 1 ? .95 : .3, hold: "The former employees’ accounts were closed.", fail: "A former employee’s account still worked, with the same password as always." }
     ],
@@ -461,7 +494,7 @@
       downtime: { label: "Unplugged everything in time", bonus: 8, text: "Two days offline, but no ransomware and no ransom.", fx: { trust: 2 }, lesson: ["Pulling the plug", "Unplugging is crude but effective, and it buys time to call for help."] },
       targeted: { label: "Contained by your outside help", bonus: 14, text: "Your outside help earned their fee this month.", fx: { trust: 5 }, lesson: ["Know who to call", "A clear arrangement with your outside help, made before the emergency, pays off at 3 a.m."] },
       mdrled: { label: "Contained by the monitoring service", bonus: 12, text: "The monitoring service paid for itself in one night.", fx: { trust: 3 }, lesson: ["Someone watching", "For a small business, a monitoring service is often the only way to have anyone watching at night."] },
-      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "A brutal week, but you never had to consider paying.", fx: {}, lesson: ["Backups", "Backups the attackers can’t delete are what let a small business survive ransomware."] },
+      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "A brutal week, but your systems came back without a decryptor.", fx: {}, lesson: ["Backups", "Backups the attackers can’t delete are what let a small business survive ransomware."] },
       paid: { label: "Paid the ransom", bonus: 0, text: "The business survived. Barely.", fx: {}, lesson: ["Backups", "Without protected backups, every option is bad."] },
       rebuilt: { label: "Rebuilt from scratch", bonus: 0, text: "The business survived. Barely.", fx: {}, lesson: ["Backups", "Without protected backups, every option is bad."] }
     }

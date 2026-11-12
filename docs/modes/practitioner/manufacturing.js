@@ -49,6 +49,8 @@
     },
 
     /* ---------- Plant-specific tasks ---------- */
+    infoRows: ["Next shutdown"], // a calendar, not a control: no task improves it
+    baseOverrides: { backup: { name: "Run an IT restore test", desc: "Restore the ERP and office systems from backup into a test environment, to prove it works." } },
     actions: [
       { id: "patchot", kind: "upkeep", skill: "infra", name: "Patch plant systems", desc: "HMIs, engineering workstations, historians. Safe only during a planned shutdown; otherwise a line has to stop.",
         apply: (S, k) => {
@@ -90,13 +92,13 @@
         ["Plant patches", lvl(S.otPatch, 70, 40), words(S.otPatch)],
         ["Next shutdown", isWindow(S) ? "good" : "warn", isWindow(S) ? "This month: safe to patch" : nw === null ? "None left this year" : `${plant.months[nw]} (${nw - S.month} month${nw - S.month > 1 ? "s" : ""})`],
         ["Plant network", S.segmented ? "good" : "bad", S.segmented ? "Separated from office" : "Flat, shared with office"],
-        ["IT backups", S.backupTested ? "good" : "bad", S.backupTested ? (S.backupAge === 0 ? "Restore tested this month" : `Restore tested ${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`) : "Restore not tested recently"],
+        mode.backupRow("IT backups"),
         ["Machine configs", S.otCfgAge <= 3 ? "good" : S.otCfgAge <= 6 ? "warn" : "bad", S.otCfgAge === 0 ? "Backed up this month" : S.otCfgAge > 7 ? "No recent backup" : `Backed up ${S.otCfgAge} months ago`],
         ["Staff awareness", lvl(S.training, 60, 35), S.training >= 60 ? "Sharp" : S.training >= 35 ? "Fading" : "Low"],
         ["Detection rules", lvl(S.detect, 70, 40), S.detect >= 70 ? "Sharp" : S.detect >= 40 ? "Drifting" : "Noisy and blind"],
         ["Endpoint protection", lvl(S.edr, 75, 50), (S.edr >= 75 ? `Well tuned (${S.edr}%)` : S.edr >= 50 ? `Partly tuned (${S.edr}%)` : `Mostly alert-only (${S.edr}%)`) + ", office only"],
         ["Email filter", lvl(S.filter, 75, 50), S.filter >= 75 ? `Well tuned (${S.filter}%)` : `Partly tuned (${S.filter}%)`],
-        ["Multi-factor login", S.mfa ? "good" : "bad", S.mfa ? "On for everyone" : "Off"],
+        mode.mfaRow("Multi-factor login", "On for everyone", "On for everyone, phishing-resistant") || ["Multi-factor login", "bad", "Off"],
         ["Old accounts", S.stale <= 3 ? "good" : S.stale <= 9 ? "warn" : "bad", S.stale === 0 ? "All cleaned up" : `${S.stale} still active`],
         ["Integrator access", S.gateway ? "good" : lvl(S.vendor, 60, 30), S.gateway ? "Through the gateway" : S.vendor >= 60 ? "Reviewed" : S.vendor >= 30 ? "Partly reviewed" : "Unknown"],
         ["Incident plan", S.irPlan ? "good" : "bad", S.irPlan ? "Written and tested" : "None"]
@@ -110,13 +112,13 @@
       "Plant patches": "HMIs, engineering workstations and historians on the plant floor. Patching outside a planned shutdown stops a line.",
       "Next shutdown": "Planned shutdowns are the only safe time to change plant systems. Plan plant work around them.",
       "Plant network": "Whether the plant is walled off from the office. On a flat network, office malware can reach the machines.",
-      "IT backups": "Office systems and the ERP, proven by an actual restore test.",
+      "IT backups": "Office systems and the ERP. A restore test proves they work; immutability keeps attackers from deleting them. A restore test counts for about two months, then needs repeating.",
       "Machine configs": "Backups of PLC programs and HMI settings. Without them, a dead controller can idle a line for days.",
       "Staff awareness": "How well staff spot phishing and fraud. It fades without practice.",
       "Detection rules": "Whether your alerts catch real attacker behavior, including on the plant network.",
       "Endpoint protection": "Office machines only. Most plant systems are too old or too sensitive to run it.",
       "Email filter": "Stops phishing and fraud attempts before they reach inboxes.",
-      "Multi-factor login": "Stops stolen passwords from being enough on their own.",
+      "Multi-factor login": "Stops stolen passwords from being enough on their own. Coverage slips over time as people join and exceptions pile up.",
       "Old accounts": "Accounts of people who left, including contractors and temps.",
       "Integrator access": "Machine builders and integrators often keep standing remote access to the lines they installed.",
       "Incident plan": "Who does what during an incident, including when to stop lines safely.",
@@ -260,8 +262,8 @@
       return { text: "The ERP upgrade failed halfway through, and the rollback backup wouldn’t restore. The plant ran on spreadsheets and phone calls for four days.", fx: { care: -10, trust: -6 }, lesson: ["Change management", "Big changes fail sometimes. A tested way back is what makes them safe to attempt."] };
     } },
     { id: "plantphish", title: "The plant manager’s password", run() {
-      if (S.mfa) return { text: "The plant manager entered his password on a fake shipping-portal page. Multi-factor login stopped the attacker at the door.", fx: { trust: 1 }, lesson: ["Multi-factor login", "A stolen password alone isn’t enough when a second factor is required."] };
-      return { text: "The plant manager entered his password on a fake shipping-portal page. The attacker read his email for two weeks and learned your production schedule and pricing.", fx: { trust: -10 }, lesson: ["Multi-factor login", "Without it, a stolen password is all an attacker needs."] };
+      if (mode.mfaOn()) return { text: "The plant manager entered his password on a fake shipping-portal page. Multi-factor login stopped the attacker at the door.", fx: { trust: 1 }, lesson: ["Multi-factor login", "A stolen password alone isn’t enough when a second factor is required."] };
+      return mode.foothold("a sign-in session from the plant manager’s phished account that was never revoked", mode.mfaGap({ text: "The plant manager entered his password on a fake shipping-portal page. The attacker read his email for two weeks and learned your production schedule and pricing.", fx: { trust: -10 }, lesson: ["Multi-factor login", "Without it, a stolen password is all an attacker needs."] }));
     } },
     { id: "rogueap", title: "A wireless router in the warehouse", run() {
       if (S.inventory >= 50) return { text: "A threat hunt turned up a cheap wireless router that a forklift vendor had plugged in for their own diagnostics. Rafael removed it.", fx: { trust: 2 }, lesson: ["Asset inventory", "Plants accumulate devices nobody remembers installing. You can’t protect what you don’t know about."] };
@@ -295,7 +297,7 @@
     intro: "Your largest automotive customer sent a security questionnaire. They want evidence of multi-factor login, a tested incident plan and tested backups, or they’ll review your contract.",
     choices: [
       { label: "Answer honestly, with a fix-it plan", run() {
-        const good = (S.mfa ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0);
+        const good = (mode.mfaFull() ? 1 : 0) + (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0);
         team.burn("you", 8);
         if (good >= 2) return { text: "You had real evidence for most of it, and a dated plan for the rest. The customer renewed without conditions.", fx: { trust: 6 }, lesson: ["Customer security requirements", "Big customers increasingly require proof of security. Honest answers with a credible plan keep their trust."] };
         return { text: "You were honest: several gaps, with a dated plan to close them. The customer put you on a 90-day improvement plan, but kept the contract.", fx: { trust: -2 }, lesson: ["Customer security requirements", "Big customers increasingly require proof of security. Honest answers with a credible plan keep their trust."] };
@@ -458,12 +460,16 @@
   /* ---------- Ransomware night wording ---------- */
   plant.finale = {
     title: "Ransomware night",
+    leak: {
+      data: S => "customer part drawings, pricing and employee files", people: S => "your customers and employees",
+      rule: S => ", starting with the customers whose drawings were in the files", cost: S => 15000, payCost: S => 100000
+    },
     times: ["11:48 PM", "12:02 AM", "12:15 AM", "12:29 AM", "12:41 AM", "12:54 AM", "1:04 AM", "1:12 AM"],
     intro: S => `During a thinly staffed stretch, the ${S.gang.name} gang turns its attention to ${ORG}. A skeleton crew is minding the plant, and they know it. They start with your weakest spot and keep going until something works.`,
     vectors: S => [
-      { name: "a phishing email", p: 1 - (1 - sys.eff(S.filter)) * (1 - S.training / 100 * .8), hold: "The filter caught most copies, and the staff who saw it reported it.", fail: "A buyer opened a fake “purchase order” and entered her password on the page it led to." },
+      { name: "a phishing email", kind: "phish", p: 1 - (1 - sys.eff(S.filter)) * (1 - sys.awareness(S)), hold: "The filter caught most copies, and the staff who saw it reported it.", fail: "A buyer opened a fake “purchase order” and entered her password on the page it led to." },
       { name: "the firewall", p: S.patch / 100, hold: "The firewall flaw they wanted was already patched.", fail: "They used a known firewall flaw. The fix had been out for weeks." },
-      { name: "a stolen password", p: S.mfa ? .95 : .15, hold: "Multi-factor login asked for a code they didn’t have.", fail: "They logged in with an engineer’s password bought online. No second factor was required." },
+      { name: "a stolen password", p: mode.mfaP(.95, .15), hold: "Multi-factor login asked for a code they didn’t have.", fail: "They logged in with an engineer’s password bought online. No second factor was required." },
       { name: "an integrator’s remote tool", p: S.gateway ? .95 : S.vendor >= 60 ? .85 : .3, hold: "The integrator connection they found only works through your approved gateway.", fail: "A machine builder’s always-on remote tool was still installed on a plant computer, with a password from 2017." },
       { name: "an old account", p: S.stale <= 3 ? .95 : .3, hold: "The forgotten accounts they hunted for were already disabled.", fail: `One of ${S.stale} accounts belonging to people who’d left still worked.` }
     ].concat(S.expanded ? [{ name: "line 5", p: S.done.line5 ? .9 : .2, hold: "Line 5 had been locked down after go-live.", fail: "Line 5’s robot controller still had its factory password, and the integrator’s laptop software was still installed." }] : []),
@@ -541,10 +547,10 @@
       early: { label: "Contained one workstation", bonus: 15, text: "One workstation rebuilt, one account reset, and the lines never noticed.", fx: { trust: 5 }, lesson: ["Detection and response", "Catching an attacker on the first machine is the cheapest win there is."] },
       segment: { label: "Cut the plant off in time", bonus: 13, text: "One rough night shift on printed orders. The machines never saw the attackers.", fx: { trust: 4 }, lesson: ["Containment trade-offs", "Separating the plant from the office is blunt, but it protects the machines. Sometimes that’s the right price."] },
       watched: { label: "Watched, then evicted", bonus: 16, text: "Because you watched first, you got every foothold in one sweep.", fx: { trust: 6 }, lesson: ["Scoping before containing", "Cutting off attackers before you know their full footprint can leave footholds behind. Watching is powerful and risky."] },
-      downtime: { label: "Shut down in time", bonus: 8, text: "Two days of stopped lines, but no ransomware, no ransom and no lost data.", fx: { trust: 2 }, lesson: ["Shutting down", "Shutting everything down is blunt but effective. Knowing how to stop and restart the plant safely is what makes it survivable."] },
+      downtime: { label: "Shut down in time", bonus: 8, text: "Two days of stopped lines, but no ransomware, no ransom and nothing encrypted.", fx: { trust: 2 }, lesson: ["Shutting down", "Shutting everything down is blunt but effective. Knowing how to stop and restart the plant safely is what makes it survivable."] },
       targeted: { label: "Targeted containment", bonus: 14, text: "Precise containment kept the lines running all night.", fx: { trust: 5 }, lesson: ["Detection and response", "Good detection and a well-mapped network let you contain precisely instead of stopping everything."] },
       mdrled: { label: "Contained by MDR", bonus: 12, text: "A few servers rebuilt and a long report from the MDR provider.", fx: { trust: 3 }, lesson: ["Detection and response", "A tuned MDR service brings round-the-clock expertise a small team can’t staff itself."] },
-      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "Painful, but you never had to consider paying.", fx: {}, lesson: ["Backups", "Proven, protected backups turn ransomware from a catastrophe into a terrible few weeks."] },
+      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "Painful, but your systems came back without a decryptor.", fx: {}, lesson: ["Backups", "Proven, protected backups turn ransomware from a catastrophe into a terrible few weeks."] },
       paid: { label: "Paid the ransom", bonus: 0, text: "The owners have questions.", fx: {}, lesson: ["Backups", "Without proven, protected backups, every option is bad."] },
       rebuilt: { label: "Rebuilt from scratch", bonus: 0, text: "The owners have a lot of questions.", fx: {}, lesson: ["Backups", "Without proven, protected backups, every option is bad."] }
     }

@@ -49,6 +49,7 @@
     },
 
     /* ---------- Hospital-specific tasks ---------- */
+    baseOverrides: { backup: { name: "Run an EHR restore test", desc: "Restore the EHR from backup into a test environment, to prove it works." } },
     actions: [
       { id: "labtest", kind: "upkeep", skill: "infra", order: 1, name: "Test clinical patches in the lab", desc: "Try this month’s clinical patches on test systems first.",
         apply: S => { S.labTested = true; return "Tested clinical patches in the lab. Two needed workarounds."; } },
@@ -105,12 +106,12 @@
         ["IT patches", lvl(S.patch, 70, 40), pct(S.patch, ["Current", "Falling behind", "Badly behind"])],
         ["Clinical patches", lvl(S.clinPatch, 70, 40), pct(S.clinPatch, ["Current", "Falling behind", "Badly behind"])],
         ["Medical devices", S.segmented ? "good" : "bad", S.segmented ? "Segmented" : "On the flat network"],
-        ["EHR backups", S.backupTested ? "good" : "bad", S.backupTested ? (S.backupAge === 0 ? "Restore tested this month" : `Restore tested ${S.backupAge} month${S.backupAge > 1 ? "s" : ""} ago`) : "Restore not tested recently"],
+        mode.backupRow("EHR backups"),
         ["Staff awareness", lvl(S.training, 60, 35), pct(S.training, ["Sharp", "Fading", "Low"])],
         ["Detection rules", lvl(S.detect, 70, 40), S.detect >= 70 ? "Sharp" : S.detect >= 40 ? "Drifting" : "Noisy and blind"],
         ["Endpoint protection", lvl(S.edr, 75, 50), S.edr >= 100 ? "Fully tuned" : S.edr >= 75 ? `Well tuned (${S.edr}%)` : S.edr >= 50 ? `Partly tuned (${S.edr}%)` : `Mostly alert-only (${S.edr}%)`],
         ["Email filter", lvl(S.filter, 75, 50), S.filter >= 75 ? `Well tuned (${S.filter}%)` : `Partly tuned (${S.filter}%)`],
-        ["Multi-factor login", S.mfa ? "good" : "bad", S.mfa ? "On for everyone" : "Off"],
+        mode.mfaRow("Multi-factor login", "On for everyone", "On for everyone, phishing-resistant") || ["Multi-factor login", "bad", "Off"],
         ["Old accounts", S.stale <= 3 ? "good" : S.stale <= 9 ? "warn" : "bad", S.stale === 0 ? "All cleaned up" : `${S.stale} still active`],
         ["Vendor access", lvl(S.vendor, 60, 30), S.vendor >= 60 ? "Reviewed" : S.vendor >= 30 ? "Partly reviewed" : "Unknown"],
         ["Shared logins", S.badge ? "good" : "warn", S.badge ? "Retired" : "Still in use"],
@@ -124,12 +125,12 @@
       "IT patches": "Servers, laptops, the VPN and network gear. Attackers love unpatched edge devices.",
       "Clinical patches": "EHR, imaging, lab and pharmacy systems. Patching them untested can disrupt care.",
       "Medical devices": "Pumps, monitors and imaging often can’t be patched. Segmentation keeps attackers from reaching them.",
-      "EHR backups": "Only proven by an actual restore test. They decide whether ransomware is a bad week or a catastrophe.",
+      "EHR backups": "A restore test proves they work. Immutability proves attackers can’t delete them first. Together they decide whether ransomware is a bad week or a catastrophe. A restore test counts for about two months, then needs repeating.",
       "Staff awareness": "How well staff spot phishing and social engineering. It fades without practice.",
       "Detection rules": "Whether your alerts catch real attacker behavior. Rules drift as systems change.",
       "Endpoint protection": "Software on each machine that blocks malicious behavior once it’s tuned and in blocking mode.",
       "Email filter": "Stops phishing before it reaches inboxes.",
-      "Multi-factor login": "Stops stolen passwords from being enough on their own.",
+      "Multi-factor login": "Stops stolen passwords from being enough on their own. Coverage slips over time as people join and exceptions pile up.",
       "Old accounts": "Accounts of people who left. Hospitals have a lot of turnover.",
       "Vendor access": "Device and software vendors often have standing remote access. Every one is a door.",
       "Shared logins": "Shared clinical accounts make it impossible to tell who did what.",
@@ -211,9 +212,9 @@
     { id: "payroll", title: "A nurse’s paycheck never arrives", run() {
       const f = sys.filterCatch();
       if (f.caught) return { text: "A wave of fake “benefits enrollment” emails hit the hospital. The email filter caught nearly all of them before anyone saw one.", fx: { trust: 3 }, lesson: ["Email filtering", "A tuned filter stops many phishing campaigns before people ever get the chance to click."] };
-      if (!chance((100 - S.training) / 100 * .8)) return { text: "A fake “benefits enrollment” email reached staff." + (f.note || "") + " Nurses on 4 West reported it within minutes, and Priya blocked the sender.", fx: { trust: 3 }, lesson: ["Phishing", "Staff who report quickly turn a phishing campaign into a non-event."] };
-      if (S.mfa) return { text: "A nurse entered her password on a fake benefits page. The attacker tried to log in and change her direct deposit, but multi-factor login stopped them.", fx: { trust: -1 }, lesson: lessons.phishing };
-      return { text: "A nurse entered her password on a fake benefits page. Two weeks later her paycheck went to someone else’s account, and so did three colleagues’.", fx: { trust: -10, morale: -4, budget: -6000 }, lesson: lessons.phishing };
+      if (!chance(sys.clickChance(S, .8))) return { text: "A fake “benefits enrollment” email reached staff." + (f.note || "") + " Nurses on 4 West reported it within minutes, and Priya blocked the sender.", fx: { trust: 3 }, lesson: ["Phishing", "Staff who report quickly turn a phishing campaign into a non-event."] };
+      if (mode.mfaOn()) return { text: "A nurse entered her password on a fake benefits page. The attacker tried to log in and change her direct deposit, but multi-factor login stopped them.", fx: { trust: -1 }, lesson: lessons.phishing };
+      return mode.mfaGap({ text: "A nurse entered her password on a fake benefits page. Two weeks later her paycheck went to someone else’s account, and so did three colleagues’.", fx: { trust: -10, morale: -4, budget: -6000 }, lesson: lessons.phishing });
     } },
     { id: "ehrpatch", title: "Emergency EHR patch", intro: "The EHR vendor released an emergency fix for a flaw attackers are already using. Installing it means taking the EHR down for two hours, and the next scheduled maintenance window is two weeks away.", choices: [
       { label: "Patch tonight, 2 to 4 a.m.", run() { S.clinPatch = clamp(S.clinPatch + 25); team.burn("marcus", 10);
@@ -283,14 +284,14 @@
         return { text: "Nobody hit you before the weekend. You patched with no fuss.", fx: {}, lesson: ["Edge devices", "VPNs and firewalls face the internet directly. Waiting on an exploited flaw is a gamble."] }; } }
     ] },
     { id: "survey", title: "The surveyors ask about security", run() {
-      const good = (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (S.mfa ? 1 : 0);
+      const good = (S.irPlan ? 1 : 0) + (S.backupTested ? 1 : 0) + (mode.mfaFull() ? 1 : 0);
       if (good >= 2) return { text: "The accreditation surveyors asked how you’d keep caring for patients during a cyberattack. You walked them through the tested incident plan and your last restore test. They moved on, satisfied.", fx: { trust: 6 }, lesson: ["Proving your controls", "Auditors want evidence, not intentions: a tested plan and a recent restore test say more than any policy."] };
       return { text: "The accreditation surveyors asked how you’d keep caring for patients during a cyberattack. You didn’t have a good answer, and it ended up in their findings.", fx: { trust: -8 }, lesson: ["Proving your controls", "Auditors want evidence, not intentions: a tested plan and a recent restore test say more than any policy."] };
     } },
     { id: "mfafatigue", title: "A 2 a.m. login approval", run() {
-      if (!S.mfa) return { text: "An attacker with a stolen password logged in as an anesthesiologist and searched patient records for two days before anyone noticed.", fx: { trust: -10 }, lesson: ["Multi-factor login", "Without it, a stolen password is all an attacker needs."] };
+      if (!mode.mfaOn()) return mode.foothold("an app the attackers authorized on an anesthesiologist’s account, which survived his password reset", mode.mfaGap({ text: "An attacker with a stolen password logged in as an anesthesiologist and searched patient records for two days before anyone noticed.", fx: { trust: -10 }, lesson: ["Multi-factor login", "Without it, a stolen password is all an attacker needs."] }));
       if (S.detect >= 50) return { text: "An attacker sent an anesthesiologist 30 login approval requests at 2 a.m. until he tapped “approve” to make it stop. Priya’s impossible-travel rule caught the login minutes later.", fx: { trust: 2 }, lesson: ["MFA fatigue", "Attackers spam approval requests until someone gives in. Number matching and good detection rules close the gap."] };
-      return { text: "An attacker sent an anesthesiologist 30 login approval requests at 2 a.m. until he tapped “approve” to make it stop. They read his email for a week.", fx: { trust: -8 }, lesson: ["MFA fatigue", "Attackers spam approval requests until someone gives in. Number matching and good detection rules close the gap."] };
+      return mode.foothold("an app the attackers authorized on an anesthesiologist’s account, which survived his password reset", { text: "An attacker sent an anesthesiologist 30 login approval requests at 2 a.m. until he tapped “approve” to make it stop. They read his email for a week.", fx: { trust: -8 }, lesson: ["MFA fatigue", "Attackers spam approval requests until someone gives in. Number matching and good detection rules close the gap."] });
     } },
     { id: "lakeview", title: "Lakeview’s old server", available: S => S.expanded && !S.done.clinic, run() {
       if (sys.edrCatch()) { L.set(...sys.notes.edr); return { text: "Malware from a phishing email at Lakeview Clinic tried to spread onto the hospital network. Endpoint protection caught it at the boundary, but the clinic’s own machines needed cleaning.", fx: { morale: -3 }, lesson: integration }; }
@@ -451,12 +452,17 @@
   /* ---------- Ransomware night wording ---------- */
   hospital.finale = {
     title: "Ransomware night",
+    leak: {
+      data: S => "patient records: names, diagnoses and insurance numbers", people: S => "every affected patient",
+      rule: S => ", and reported the breach to federal regulators under HIPAA’s rules", cost: S => 40000, payCost: S => 150000,
+      waitWin: (S, who) => `Forensics confirmed what was taken within weeks, and you notified ${who} well inside HIPAA’s 60-day limit. Careful, and this time it held.`
+    },
     times: ["11:48 PM", "12:02 AM", "12:15 AM", "12:29 AM", "12:41 AM", "12:54 AM", "1:04 AM", "1:12 AM"],
     intro: S => `Late on a Saturday, the ${S.gang.name} gang turns its attention to ${ORG}. Weekends are thinly staffed, and they know it. They start with your weakest spot and keep going until something works.`,
     vectors: S => [
-      { name: "a phishing email", p: 1 - (1 - sys.eff(S.filter)) * (1 - S.training / 100 * .8), hold: "The filter caught most copies, and the staff who saw it reported it.", fail: "A unit secretary entered her password on a fake “shift swap” page." },
+      { name: "a phishing email", kind: "phish", p: 1 - (1 - sys.eff(S.filter)) * (1 - sys.awareness(S)), hold: "The filter caught most copies, and the staff who saw it reported it.", fail: "A unit secretary entered her password on a fake “shift swap” page." },
       { name: "the VPN", p: S.patch / 100, hold: "The VPN flaw they wanted was already patched.", fail: "They used a known VPN flaw. The fix had been out for weeks." },
-      { name: "a stolen password", p: S.mfa ? .95 : .15, hold: "Multi-factor login asked for a code they didn’t have.", fail: "They logged in with a nurse’s password bought online. No second factor was required." },
+      { name: "a stolen password", p: mode.mfaP(.95, .15), hold: "Multi-factor login asked for a code they didn’t have.", fail: "They logged in with a nurse’s password bought online. No second factor was required." },
       { name: "a vendor’s remote access", p: S.vendor >= 60 ? .9 : .3, hold: "The vendor connection they found was switched off; access is on-demand now.", fail: "An imaging vendor’s always-on remote tool was still running, with a reused password." },
       { name: "an old account", p: S.stale <= 3 ? .95 : .3, hold: "The forgotten accounts they hunted for were already disabled.", fail: `One of ${S.stale} accounts belonging to people who’d left still worked.` }
     ].concat(S.expanded ? [{ name: "the newly acquired clinic", p: S.done.clinic ? .9 : .2, hold: "Lakeview Clinic’s network had been rebuilt to hospital standards.", fail: "Lakeview Clinic’s old file server, still running its 2016 setup, let them straight in and onto the hospital network." }] : []),
@@ -534,10 +540,10 @@
       early: { label: "Contained one workstation", bonus: 15, text: "One workstation rebuilt, one account reset, and patient care never noticed.", fx: { trust: 5 }, lesson: ["Detection and response", "Catching an attacker on the first machine is the cheapest win there is."] },
       segment: { label: "Contained one unit", bonus: 13, text: "One unit had a rough night on paper. Everyone else slept through it.", fx: { trust: 4 }, lesson: ["Containment trade-offs", "Broader containment is more certain but costs more. Sometimes that’s the right price."] },
       watched: { label: "Watched, then evicted", bonus: 16, text: "Because you watched first, you got every foothold in one sweep.", fx: { trust: 6 }, lesson: ["Scoping before containing", "Cutting off attackers before you know their full footprint can leave footholds behind. Watching is powerful and risky."] },
-      downtime: { label: "Pulled the plug in time", bonus: 8, text: "Two days on paper, but no ransomware, no ransom and no lost data.", fx: { trust: 2 }, lesson: ["Downtime procedures", "Disconnecting is blunt but effective. Rehearsed downtime procedures are what make it survivable for patients."] },
+      downtime: { label: "Pulled the plug in time", bonus: 8, text: "Two days on paper, but no ransomware, no ransom and nothing encrypted.", fx: { trust: 2 }, lesson: ["Downtime procedures", "Disconnecting is blunt but effective. Rehearsed downtime procedures are what make it survivable for patients."] },
       targeted: { label: "Targeted containment", bonus: 14, text: "Precise containment kept clinical systems running all night.", fx: { trust: 5 }, lesson: ["Detection and response", "Good detection and a well-mapped network let you contain precisely instead of shutting everything down."] },
       mdrled: { label: "Contained by MDR", bonus: 12, text: "A few servers rebuilt and a long report from the MDR provider.", fx: { trust: 3 }, lesson: ["Detection and response", "A tuned MDR service brings round-the-clock expertise a small team can’t staff itself."] },
-      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "Painful, but you never had to consider paying.", fx: {}, lesson: ["Backups", "Proven, protected backups turn ransomware from a catastrophe into a terrible few weeks."] },
+      restored: { label: "Encrypted, restored from backups", bonus: 4, text: "Painful, but your systems came back without a decryptor.", fx: {}, lesson: ["Backups", "Proven, protected backups turn ransomware from a catastrophe into a terrible few weeks."] },
       paid: { label: "Paid the ransom", bonus: 0, text: "The board has questions.", fx: {}, lesson: ["Backups", "Without proven, protected backups, every option is bad."] },
       rebuilt: { label: "Rebuilt from scratch", bonus: 0, text: "The board has a lot of questions.", fx: {}, lesson: ["Backups", "Without proven, protected backups, every option is bad."] }
     }

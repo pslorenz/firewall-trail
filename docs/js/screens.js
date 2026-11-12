@@ -21,7 +21,7 @@
       <div class="modes">${cards}</div>
       <div class="titlebar">
         <form class="codeform" id="codeform" autocomplete="off"><label for="code">Have a year code?</label>
-          <input id="code" name="code" placeholder="PHNT-K7F3Q" maxlength="12" spellcheck="false"><button class="btn ghost" type="submit">Play it</button></form>
+          <input id="code" name="code" placeholder="PHNT-K7F3Q-2" maxlength="14" spellcheck="false"><button class="btn ghost" type="submit">Play it</button></form>
         <p class="hint" id="codemsg" aria-live="polite"></p>
         <button class="linkish" id="achv">Achievements (${Object.keys(FT.ach.unlocked()).length} of ${FT.ach.all().length})</button>
       </div></div>`;
@@ -31,14 +31,16 @@
       e.preventDefault();
       const parsed = FT.rng.parse(document.getElementById("code").value);
       const m = parsed && FT.modeOrder.map(id => FT.modes[id]).find(x => x.codeLetter === parsed.prefix[0]);
-      if (!parsed || !m || (m.loadCode && !m.loadCode(parsed.prefix))) { document.getElementById("codemsg").textContent = "That code doesn’t look right. Codes look like PHNT-K7F3Q."; return; }
+      if (!parsed || !m || (m.loadCode && !m.loadCode(parsed.prefix))) { document.getElementById("codemsg").textContent = "That code doesn’t look right. Codes look like PHNT-K7F3Q-2."; return; }
+      const current = m.rulesVersion || 1;
+      if (parsed.version > current) { document.getElementById("codemsg").textContent = "That code is from a newer version of the game. Reload the page to get the latest version, then try again."; return; }
       FT.pendingSeed = parsed.seed;
-      intro(m.id, `${parsed.prefix}-${parsed.seed}`);
+      intro(m.id, `${parsed.prefix}-${parsed.seed}${parsed.version > 1 ? `-${parsed.version}` : ""}`, parsed.version < current);
     };
     const first = FT.app.querySelector("button[data-mode]:not(:disabled)"); if (first) first.focus();
   }
 
-  function intro(id, loadedCode) {
+  function intro(id, loadedCode, olderVersion) {
     const m = FT.mode = FT.modes[id];
     if (!loadedCode) FT.pendingSeed = null;
     document.title = `The Firewall Trail: ${m.name}`;
@@ -46,7 +48,7 @@
       <h1>The Firewall Trail</h1>
       <p class="pixel" style="font-size:1.6rem;color:var(--teal);margin-top:.4rem">${m.name}</p>
       ${ui.trail(m.months, 0)}
-      <div class="panel">${loadedCode ? `<div class="notice yearnote"><b>Year code ${loadedCode} loaded.</b> The options below are set to match it. Press start to play that exact year.</div>` : ""}${m.intro}
+      <div class="panel">${loadedCode ? `<div class="notice yearnote"><b>Year code ${loadedCode} loaded.</b> The options below are set to match it. ${olderVersion ? "This code was made with an earlier version of the game, so you’ll get the same setting, conditions and starting situation, but some events and ransomware night may play out differently. Your new code for this year will be shown when you start." : "Press start to play that exact year."}</div>` : ""}${m.intro}
         ${m.introOptions ? m.introOptions() : ""}
         <div class="row"><button class="btn" id="go">${m.startLabel}</button><button class="linkish" id="back">Choose a different mode</button></div>
       </div></div>`;
@@ -62,12 +64,15 @@
     FT.rng.begin(typeof replaySeed === "string" ? replaySeed : FT.pendingSeed);
     FT.pendingSeed = null;
     FT.reset(Object.assign({ month: 0, finale: false, finaleResult: null }, m.newState()));
-    S.code = FT.rng.code(m.codePrefix ? m.codePrefix(S) : m.codeLetter);
+    S.code = FT.rng.code(m.codePrefix ? m.codePrefix(S) : m.codeLetter, m.rulesVersion || 1);
     deck = shuffle(m.events.filter(e => e.deck !== false).map(e => e.id), FT.rng.fork("events"));
     plan();
   }
 
   /* ---------- Planning the month ---------- */
+  function overBudget() {
+    return `<div class="notice"><b>Over budget.</b> Free tasks still work, but anything that costs money waits until the budget recovers.</div>`;
+  }
   function plan() {
     FT.rng.stream("month" + S.month); // each month's luck comes from its own stream
     if (FT.mode.plan) return FT.mode.plan(); // modes can bring their own planning screen
@@ -81,7 +86,8 @@
       const optFor = g => m.actions.filter(a => a.group === g && visible(a)).map(a => {
         const on = picked.has(a.id);
         const spent = [...picked].reduce((s, id) => s + costOf(id), 0);
-        const blocked = !on && (used + a.slots > slots || S.budget < a.cost + spent);
+        // Free tasks stay available even when the budget is negative
+        const blocked = !on && (used + a.slots > slots || (a.cost > 0 && S.budget < a.cost + spent));
         const suggest = first && (t.suggested || []).includes(a.id) ? `<span class="suggest">${m.advisor.name} suggests</span>` : "";
         return `<label class="opt ${on ? "on" : ""} ${blocked ? "off" : ""}"><input type="checkbox" data-id="${a.id}" ${on ? "checked" : ""} ${blocked ? "disabled" : ""}>
           <div><b>${a.name}</b>${suggest}<small>${a.desc}</small></div>
@@ -91,7 +97,7 @@
       const tipBox = first && tip < tips.length ? ui.advisor(`<p><b>${m.advisor.name}:</b> ${tips[tip]}</p>
           <div class="row"><button class="btn" id="tipnext">${tip < tips.length - 1 ? "Next tip" : "Got it"}</button>${tip < tips.length - 1 ? `<button class="mini" id="tipskip">Skip tips</button>` : ""}<span class="hint">${tip + 1} of ${tips.length}</span></div>`, "tut") : "";
       const note = t.monthNotes && t.monthNotes[S.month] ? ui.advisor(`<p><b>${m.advisor.name}:</b> ${t.monthNotes[S.month]}</p>`) : "";
-      const warning = m.threatWarning ? m.threatWarning(S) : "";
+      const warning = (m.threatWarning ? m.threatWarning(S) : "") + (S.budget < 0 ? overBudget() : "");
 
       FT.app.innerHTML = ui.header() + `<div class="panel">
         <h2>${m.months[S.month]}: ${m.landmarks[S.month]}</h2>

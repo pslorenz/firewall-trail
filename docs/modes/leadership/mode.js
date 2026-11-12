@@ -27,7 +27,9 @@
       ["Detection and monitoring", lvl(d.detect + (d.mdr ? 25 : 0), 70, 40), d.mdr ? "Watched around the clock." : d.detect >= 40 ? "Business hours only." : "Mostly blind."],
       ["Incident response", d.irPlan ? 2 : 0, d.irPlan ? "Plan tested, outside responders on retainer." : "No tested plan, no retainer."],
       ["Vendor access", lvl(d.vendor, 60, 30), d.vendor >= 60 ? "Reviewed." : d.vendor >= 30 ? "Partly reviewed." : "Unknown."],
-      ["Executive exceptions", d.exceptions === 0 ? 2 : d.exceptions === 1 ? 1 : 0, d.exceptions === 0 ? "None." : `${d.exceptions} granted.`]
+      ["Executive exceptions", d.exceptions === 0 ? 2 : d.exceptions === 1 ? 1 : 0, d.exceptions === 0 ? "None." : `${d.exceptions} granted.`],
+      // An incident closed without a full investigation may have left attackers a way back in
+      ["Past incidents", S.lingering ? 0 : S.incidentOpen ? 1 : 2, S.lingering ? `The Q${S.incidentQ + 1} incident was closed without a full investigation. The attackers kept a way back in.` : S.incidentOpen ? `The Q${S.incidentQ + 1} incident was closed without a full investigation. As it happens, they hadn’t left anything behind.` : S.investigated ? "Fully investigated and closed." : "None that needed investigating."]
     ];
   }
   // The report: each row is accurate with probability = visibility; otherwise
@@ -60,6 +62,9 @@
     for (const a of ASKS) if (a.q <= S.month && !S.funded[a.id]) { const o = (st.askText || {})[a.id] || {}; list.push(Object.assign({ kind: "ask" }, a, { name: o.name || a.name, desc: `Requested by ${st.lead.short}${a.q < S.month ? " (still waiting)" : ""}. ${o.desc || a.desc}` })); }
     if (st.extraCards) for (const c of st.extraCards(S)) list.push(Object.assign({ kind: "extra" }, c));
     list.push({ id: "assess", kind: "vis", name: "Independent security assessment", cost: 120000, desc: "Outside experts check what’s really true. Next quarter’s report will be accurate." });
+    if (S.incidentOpen) list.push({ id: "reinvestigate", kind: "inv", name: `Reopen the Q${S.incidentQ + 1} incident and investigate it fully`, cost: 150000, desc: "Outside responders check whether the attackers left a way back in. Closing it quickly saved money; this finds out what that cost." });
+    // The insurance application asks about multi-factor login. Answering “yes” when it isn’t true halves the premium, and puts the claim at risk.
+    if (!S.insured && !S.d.mfa) list.push({ id: "insurecheap", kind: "ins", name: "Buy cyber insurance, answering “yes” on multi-factor login", cost: Math.round(150000 * (S.insMult || 1)), desc: "Your broker points out that the application’s multi-factor question decides the price. Answering “yes” halves the premium. It isn’t enforced yet." });
     if (!S.insured) list.push({ id: "insure", kind: "ins", name: "Buy cyber insurance for the year", cost: Math.round((S.d.mfa ? 150000 : 300000) * (S.insMult || 1)), desc: S.d.mfa ? "Covers incident costs and gives you a panel of responders and lawyers." : "Insurers charge double without enforced multi-factor login. Covers incident costs and provides responders." });
     list.push({ id: "growth", kind: "growth", name: st.growth.name, cost: st.growth.cost, desc: st.growth.desc });
     return list;
@@ -69,7 +74,19 @@
    * Each has a from, text, and options [{label, run(S) → {text, fx}}].
    * fx can include board, care, trust, cash, and lead (security lead morale). */
   const accept = (S, name, desc) => { S.accepted.push({ name, desc, quarter: S.month }); };
+  const INVESTIGATE_LESSON = ["Finish the investigation", "Containing an attack isn’t the same as understanding it. Attackers often leave a second way back in, and only a full investigation finds it."];
   const DILEMMAS = [
+    { id: "investigate", followup: true, from: "General counsel", title: "Close the incident, or investigate fully?", text: S => `About last quarter’s attack on one server: ${S.incidentCaught ? "the team contained it fast" : "the server is cleaned up"}, and the CFO wants it closed. ${S.leadGone ? "Outside responders" : mode.setting.lead.short} want${S.leadGone ? "" : "s"} a full forensic investigation first, to find out whether the attackers got anywhere else. It costs $150,000.`, options: [
+      { label: "Investigate fully ($150k)", run: S => {
+        S.budget -= 150000; S.investigated = true; L.set(...INVESTIGATE_LESSON);
+        if (chance(S.incidentCaught ? .35 : .75)) return { text: "The investigation found a second backdoor on a server nobody had looked at, and removed it. Closing the incident early would have left it there.", fx: { lead: 6, board: 2 } };
+        return { text: "The investigation confirmed the attackers never got further. Money well spent: now you know, instead of hoping.", fx: { lead: 6 } };
+      } },
+      { label: "Close it; it’s contained", run: S => {
+        S.incidentOpen = true; S.lingering = chance(S.incidentCaught ? .35 : .75);
+        return { text: "Closed. The CFO was pleased, and the board was glad to put it behind them.", fx: { board: 2, lead: -6 } };
+      } }
+    ] },
     { id: "ceomfa", first: true, from: "IT", title: "Your phone needs multi-factor login", text: S => `IT is enrolling everyone in multi-factor login${S.d.mfa ? "" : " where it exists"}, including you. Your assistant says it will slow you down on the road and asks whether you want an exemption.`, options: [
       { label: "Enroll like everyone else", run: S => ({ text: "You enrolled, and mentioned it at the all-hands. Adoption across the company jumped that week.", fx: { lead: 8, trust: 1 } }) },
       { label: "Take the exemption", run: S => { S.d.exceptions++; return { text: "Granted. You’re now the most valuable account in the company with the weakest protection, and staff noticed.", fx: { lead: -8 } }; } }
@@ -143,7 +160,9 @@
     } },
     { id: "caughtearly", title: "Attackers on one server", run(S) {
       const score = S.d.detect + (S.d.mdr ? 30 : 0);
-      if (chance(score / 110)) return { text: "Your security team caught attackers on one server within an hour and contained them. Most of your company never knew. That’s what good looks like.", fx: { board: 2, lead: 6 }, lesson: ["Detection pays quietly", "Most security wins are invisible. Funding detection means problems end as a footnote instead of a headline."] };
+      // Either way, next quarter's inbox opens with the question of how far to investigate
+      S.incidentQ = S.month; S.dilemmaDeck.unshift("investigate");
+      if (chance(score / 110)) { S.incidentCaught = true; return { text: "Your security team caught attackers on one server within an hour and contained them. Most of your company never knew. That’s what good looks like.", fx: { board: 2, lead: 6 }, lesson: ["Detection pays quietly", "Most security wins are invisible. Funding detection means problems end as a footnote instead of a headline."] }; }
       return { text: "Attackers had been on one of your servers for four months. You found out when a security researcher emailed to say your data was for sale.", fx: { trust: -10, board: -8, cash: -200000 }, lesson: ["Detection pays quietly", "Without monitoring, the first sign of a breach is often someone outside telling you."] };
     } },
     { id: "laptop", title: "Your laptop, stolen", run(S) {
@@ -229,6 +248,8 @@
     ],
     allSettings: () => settings,
     codeLetter: "L",
+    // Bump when a change makes an existing year code play out differently
+    rulesVersion: 2,
     codePrefix: S => "L" + mode.setting.letter + STARTS.find(x => x.id === S.startInfo.id).letter,
     loadCode(prefix) {
       if (prefix.length !== 3) return false;
@@ -267,12 +288,15 @@
       const ids = Object.keys(settings);
       mode.useSetting(FT.picker.resolve(mode).setting);
       const st = mode.setting;
-      const deck = shuffle(DILEMMAS.filter(x => !x.first && !(st.skipDilemmas || []).includes(x.id)).concat(st.dilemmas || []).map(x => x.id));
+      const deck = shuffle(DILEMMAS.filter(x => !x.first && !x.followup && !(st.skipDilemmas || []).includes(x.id)).concat(st.dilemmas || []).map(x => x.id));
       const state = {
         settingId: st.id, board: 65, care: 75, trust: 70, budget: st.quarterBudget,
         lead: 65, leadGone: false, vis: 40, assessed: false, insured: false,
         d: { mfa: false, backups: false, backupsOld: true, patch: 45, detect: 35, mdr: false, irPlan: false, vendor: 30, exceptions: 0 },
         funded: {}, accepted: [], claimedSafe: false, falseAttest: false, cutHeadcount: false,
+        insuranceMisrep: false, lingering: false, incidentOpen: false, investigated: false, incidentQ: null,
+        // About one ransomware group in four is on a sanctions list; its own stream, so nothing else shifts
+        sanctioned: FT.rng.fork("sanctions")() < .25,
         income: 0, growthQuarters: 0, dilemmaDeck: deck, boardQs: shuffle(BOARD_QS.slice()),
         tutorial: mode.prefs.tutorial, reportHistory: [], finaleResult: null
       };
@@ -388,13 +412,16 @@
     function draw() {
       const spent = [...picked].reduce((t, id) => t + list.find(c => c.id === id).cost, 0), left = S.budget - spent;
       const html = list.map(c => {
-        const on = picked.has(c.id), blocked = !on && c.cost > left;
+        // Only one insurance policy at a time
+        const otherPolicy = c.kind === "ins" && [...picked].some(id => id !== c.id && list.find(x => x.id === id).kind === "ins");
+        const on = picked.has(c.id), blocked = !on && (c.cost > left || otherPolicy);
         return `<label class="opt ${on ? "on" : ""} ${blocked ? "off" : ""}"><input type="checkbox" data-id="${c.id}" ${on ? "checked" : ""} ${blocked ? "disabled" : ""}>
           <div><b>${c.name}</b><small>${c.desc}</small></div><span class="cost">${M(c.cost)}</span></label>`;
       }).join("");
       FT.app.innerHTML = ui.header() + `<div class="panel"><h2>Q${S.month + 1}: ${mode.landmarks[S.month]}</h2>
         ${S.month === 0 ? `<div class="notice">${st.briefing}</div>${FT.years.notice()}` : ""}
         ${tip(st.tips[0])}
+        ${S.month === 3 && S.sanctioned && !S.leadGone ? `<div class="notice"><b>${st.lead.short} flags:</b> the ransomware group hitting your industry this year is on the US Treasury’s sanctions list. If it comes for you, paying won’t be an option: only backups, or rebuilding.</div>` : ""}
         ${S.leadGone ? `<div class="notice">There is no security lead. Nobody is asking you for anything, which is not the same as nothing being wrong.</div>` : ""}
         <div class="${S.tutorial && S.month === 0 ? "spot" : ""}">${reportHTML(S)}</div>
         ${st.businessPanel ? st.businessPanel(S) : ""}
@@ -414,6 +441,8 @@
           else if (c.kind === "ask") { c.apply(S); S.funded[id] = true; leadChange(10); lines.push(`Funded: ${c.name.toLowerCase()}.`); }
           else if (id === "assess") { S.assessed = true; S.vis = clamp(S.vis + 30); lines.push("Commissioned an independent assessment. Its findings arrive next quarter."); }
           else if (id === "insure") { S.insured = true; lines.push("Bought cyber insurance for the year."); }
+          else if (id === "insurecheap") { S.insured = true; S.insuranceMisrep = true; lines.push("Bought cyber insurance for the year at the lower rate. The application you signed says multi-factor login is enforced."); }
+          else if (id === "reinvestigate") { S.incidentOpen = false; S.investigated = true; const found = S.lingering; S.lingering = false; lines.push(found ? `The investigation found a backdoor left from the Q${S.incidentQ + 1} incident and removed it. Closing it early would have left it there.` : `The investigation confirmed the Q${S.incidentQ + 1} incident really was contained. Now you know.`); L.set(...INVESTIGATE_LESSON); }
           else if (c.kind === "extra") { lines.push(c.apply(S)); }
           else if (id === "growth") { S.grewThisQuarter = true; S.income += st.growth.income; S.care = clamp(S.care + st.growth.care); S.board = clamp(S.board + 4); if (st.growth.apply) st.growth.apply(S); lines.push(st.growth.done); }
         }
@@ -463,7 +492,22 @@
   function crisis() {
     S.finale = true;
     const st = mode.setting, d = S.d;
-    const strength = -(S.crisisPenalty || 0) + (d.mfa ? 25 : 0) + d.patch * .2 + (d.detect + (d.mdr ? 30 : 0)) * .3 + (d.vendor * .1) - d.exceptions * 8 - S.accepted.filter(a => !a.done).length * 8;
+    // An application that claimed multi-factor login, when it still isn't enforced, gives the insurer grounds to deny
+    const claimDenied = S.insured && S.insuranceMisrep && !d.mfa;
+    const covered = S.insured && !claimDenied;
+    let denialTold = false;
+    const denyClaim = () => {
+      if (denialTold) return; denialTold = true;
+      acc.cash -= 500000; acc.board -= 6;
+      story.push("The insurer asked for your application, which says multi-factor login is enforced. It isn’t, and the attackers came in through an account without it. The insurer denied the claim, and every cost of the response is now yours.");
+      L.set("Insurance applications", "A cyber insurance application is a signed statement. If it says a control is in place and it isn’t, the insurer can deny the claim exactly when you need it.");
+    };
+    // Uncertainty: good calls usually work and bad ones usually don't, but not always.
+    // Either kind of surprise teaches the luck lesson.
+    const luckLesson = () => L.set("Plans meet reality", "Good preparation and good calls raise your odds a lot, but they don’t guarantee the result. Sometimes the right call goes badly, and sometimes a bad one gets away with it. Judge decisions by what you knew, not only by how they turned out.");
+    const unlucky = p => { const hit = chance(p); if (hit) luckLesson(); return hit; };
+    const lucky = p => { const hit = chance(p); if (hit) luckLesson(); return hit; };
+    const strength = -(S.lingering ? 20 : 0) - (S.crisisPenalty || 0) + (d.mfa ? 25 : 0) + d.patch * .2 + (d.detect + (d.mdr ? 30 : 0)) * .3 + (d.vendor * .1) - d.exceptions * 8 - S.accepted.filter(a => !a.done).length * 8;
     const caller = S.leadGone ? "The IT director calls, sounding panicked" : `${st.lead.short} calls`;
     const acc = { board: 0, care: 0, trust: 0, cash: 0 }, story = [];
     let score = 0;
@@ -481,19 +525,27 @@
     // A full-blown attack hurts no matter how well it's handled; decisions decide how much more
     acc.care -= 10; acc.trust -= 8; acc.board -= 8;
     // ...and hits much harder with no plan, no insurance and no proven backups
-    if (!d.irPlan && !S.insured) { acc.board -= 8; acc.trust -= 4; }
+    if (!d.irPlan && !covered) { acc.board -= 8; acc.trust -= 4; }
+    if (S.lingering) story.push(`Responders traced how they got in: access left over from the Q${S.incidentQ + 1} incident, which was closed without a full investigation.`);
     if (!d.backups) { acc.care -= 6; acc.trust -= 4; }
     step1();
     function step1() {
       decide("6:10 a.m., Saturday", `${caller}: ransomware. ${st.crisisImpact} A ransom note demands ${M(st.ransom)}.${S.leadGone ? " Nobody internal really knows what to do." : ""}<br><br><b>Who do you call first?</b>`, [
         { label: "Outside lawyers and incident responders", run: () => {
-          if (S.d.irPlan || S.insured) { score += 2; story.push(S.d.irPlan ? "Your retainer had responders and lawyers working within two hours." : "Your insurer’s panel had responders and lawyers working within hours."); }
+          if ((S.d.irPlan || covered) && unlucky(.2)) { score += 1; acc.care -= 4; story.push(`${S.d.irPlan ? "Your retainer firm" : "Your insurer’s panel firm"} was swamped: the same group hit three of its other clients that night. It took nine hours to get a team on your case instead of two.`); }
+          else if (S.d.irPlan || covered) { score += 2; story.push(S.d.irPlan ? "Your retainer had responders and lawyers working within two hours." : "Your insurer’s panel had responders and lawyers working within hours."); }
+          else if (claimDenied) { score += 1; story.push("Your insurer’s panel had responders and lawyers working within hours."); denyClaim(); }
           else { score += 1; acc.cash -= 400000; story.push("With no retainer or insurance, it took two days and $400,000 in rush fees to get responders and lawyers engaged."); }
           step2();
         } },
-        { label: "Let the internal team handle it quietly", run: () => { score -= 1; acc.trust -= 4; story.push(S.leadGone ? "With no security lead, the internal team flailed for days." : "The internal team did their best, but they were overwhelmed and evidence was lost."); step2(); } },
+        { label: "Let the internal team handle it quietly", run: () => {
+          // A bad call doesn't always blow up. That's part of why people keep making it.
+          if (!S.leadGone && lucky(.2)) { story.push("The internal team held it together better than anyone expected, though they lost evidence the lawyers will want later."); step2(); return; }
+          score -= 1; acc.trust -= 4; story.push(S.leadGone ? "With no security lead, the internal team flailed for days." : "The internal team did their best, but they were overwhelmed and evidence was lost."); step2();
+        } },
         { label: "Call the insurance company", run: () => {
-          if (S.insured) { score += 2; story.push("Your insurer connected you with responders and lawyers within hours, and started the claim."); }
+          if (covered) { score += 2; story.push("Your insurer connected you with responders and lawyers within hours, and started the claim."); }
+          else if (claimDenied) { score -= 1; denyClaim(); }
           else { score -= 1; story.push("You don’t have cyber insurance. That call cost you an hour."); }
           step2();
         } }
@@ -501,40 +553,69 @@
     }
     function step2() {
       decide("8:30 a.m.", `${st.opsQuestion}`, [
-        { label: st.opsSafe, run: () => { acc.care -= 10; score += 1; story.push(st.opsSafeText); step3(); } },
+        { label: st.opsSafe, run: () => {
+          acc.care -= 10; score += 1; story.push(st.opsSafeText);
+          if (unlucky(.2)) { acc.care -= 6; score -= 1; story.push("Even so, one system nobody had listed went down with the rest, and it took a day to work out why."); }
+          step3();
+        } },
         { label: st.opsRisky, run: () => { if (chance(.5)) { acc.care -= 25; score -= 1; story.push(st.opsRiskyBad); } else { acc.care -= 6; story.push(st.opsRiskyOk); } step3(); } }
       ]);
     }
     function step3() {
       decide("Sunday", `The responders confirm attackers copied ${st.dataName} before encrypting. Forensics will take weeks. <b>What do you tell ${st.public}?</b>`, [
-        { label: "Notify now with what we know", run: () => { acc.trust -= 6; score += 1; story.push("You notified quickly and updated as you learned more. People were angry, but they heard it from you."); step4(); } },
-        { label: "Wait until forensics finish", run: () => { acc.trust -= S.regStrict ? 20 : 14; acc.board -= S.regStrict ? 8 : 4; score -= 1; story.push(`A reporter broke the story before you said anything, and ${st.regulator} asked why notification was late.`); step4(); } }
+        { label: "Notify now with what we know", run: () => {
+          acc.trust -= 6; score += 1; story.push("You notified quickly and updated as you learned more. People were angry, but they heard it from you.");
+          if (unlucky(.25)) { acc.board -= 3; acc.cash -= 100000; score -= 1; story.push(`${st.regulator[0].toUpperCase() + st.regulator.slice(1)} opened an inquiry anyway. Prompt notice helped, but it didn’t make the questions go away.`); }
+          step4();
+        } },
+        { label: "Wait until forensics finish", run: () => {
+          if (!S.regStrict && lucky(.25)) { acc.trust -= 8; story.push("Forensics finished before the story broke, and you notified with real answers. You got away with waiting this time."); step4(); return; }
+          acc.trust -= S.regStrict ? 20 : 14; acc.board -= S.regStrict ? 8 : 4; score -= 1; story.push(`A reporter broke the story before you said anything, and ${st.regulator} asked why notification was late.`); step4();
+        } }
       ]);
     }
     function step4() {
       const believesGood = S.report.find(r => r[0] === "Backups")[1] === 2;
       const reallyGood = d.backups;
-      decide("Monday", `${S.leadGone ? "The IT director" : st.lead.short} ${believesGood ? "believes the backups are good" : "isn’t confident in the backups"}.${S.falseAttest ? " Also, legal flags the attestation you signed: you certified multi-factor login that wasn’t enforced." : ""} <b>Do you pay the ransom?</b>`, [
+      // A sanctioned group can't legally be paid, and insurers won't cover it
+      const banned = S.sanctioned;
+      if (banned) L.set("Sanctioned ransomware groups", "Some ransomware groups are on government sanctions lists. Paying them can be illegal and insurers won’t cover it, so backups are the only way out. Check before anyone counts on paying.");
+      const sanctionNote = banned ? "<br><br>Legal has checked the group behind the attack: it’s on the US Treasury’s sanctions list. Paying could be illegal, and insurance won’t cover it. <b>Paying is off the table.</b>" : "";
+      decide("Monday", `${S.leadGone ? "The IT director" : st.lead.short} ${believesGood ? "believes the backups are good" : "isn’t confident in the backups"}.${S.falseAttest ? " Also, legal flags the attestation you signed: you certified multi-factor login that wasn’t enforced." : ""} <b>Do you pay the ransom?</b>${sanctionNote}`, ([
         { label: "Refuse and restore", run: () => {
-          if (reallyGood) { acc.care -= 5; score += 1; story.push("The backups were good. Restoring took a week."); }
+          if (reallyGood && unlucky(.2)) { acc.care -= 12; score -= 1; story.push("The backups were good, but one system wasn’t in them: nobody had added it when it went live. Restoring everything else took a week; that one took three."); }
+          else if (reallyGood) { acc.care -= 5; score += 1; story.push("The backups were good. Restoring took a week."); }
           else { acc.care -= 25; acc.trust -= 8; score -= 1; story.push(believesGood ? "The backups were not good, whatever the report said. Rebuilding took four weeks." : "Without good backups, rebuilding took four weeks."); }
-          step5();
+          secondWave(step5);
         } },
         { label: "Pay the ransom", run: () => {
-          acc.cash -= S.insured ? 250000 : st.ransom; acc.board -= S.insured ? 6 : 14; score -= 1;
-          story.push(`You paid${S.insured ? " (insurance covered most of it)" : ""}. The decryptor was slow, and the stolen data appeared for sale anyway.`);
+          acc.cash -= covered ? 250000 : st.ransom; acc.board -= covered ? 6 : 14; score -= 1;
+          story.push(`You paid${covered ? " (insurance covered most of it)" : ""}. The decryptor was slow, and the stolen data appeared for sale anyway.`);
           L.set("Paying the ransom", "Paying doesn’t guarantee recovery or that stolen data is deleted, funds criminals and marks you as a payer.");
-          step5();
+          secondWave(step5);
         } }
-      ]);
+      ]).filter(o => !banned || o.label !== "Pay the ransom"));
+    }
+    // Recovery is when attackers sometimes come back, through a door the response missed
+    function secondWave(next) {
+      const p = .1 + (S.lingering ? .15 : 0) + (d.mdr ? 0 : .05) + (d.mfa ? 0 : .05);
+      if (!unlucky(p)) return next();
+      acc.care -= 10; acc.board -= 6; score -= 4;
+      story.push("That night, they came back through an account the response had missed and hit the systems you had just restored.");
+      L.set("Attackers come back", "Recovery is a target too. Attackers who still have a way in often return while you rebuild, which is why responders hunt for every door before declaring victory.");
+      decide("Monday night", "They’re back. That night, the attackers returned through an account the response had missed and hit systems you had just restored. Responders are cutting them off again, and recovery restarts.", [{ label: "Keep going", run: next }]);
     }
     function step5() {
       decide("Tuesday", "The press is calling. <b>What do you say?</b>", [
-        { label: "A CEO statement: what happened, what we’re doing", run: () => { acc.trust += 4; score += 1; story.push("You fronted it yourself. Coverage was rough but fair."); conclude(); } },
+        { label: "A CEO statement: what happened, what we’re doing", run: () => {
+          if (unlucky(.2)) { score += 1; story.push("You fronted it yourself and said all the right things, but a reporter found an angry customer, and that became the story."); conclude(); return; }
+          acc.trust += 4; score += 1; story.push("You fronted it yourself. Coverage was rough but fair."); conclude();
+        } },
         { label: "“No evidence any data was accessed”", run: () => { acc.trust -= 12; acc.board -= 6; score -= 1; story.push("That statement was false, and the stolen data being sold online proved it within a week."); conclude(); } }
       ]);
     }
     function conclude() {
+      if (claimDenied) denyClaim();
       if (S.claimedSafe) { acc.board -= 10; story.push("The board reminded you that you told them you were in good shape."); }
       if (S.falseAttest) { acc.board -= 6; acc.trust -= 4; story.push("Legal is now dealing with the false attestation you signed."); }
       if (st.crisisExtra) st.crisisExtra(S, acc, story);

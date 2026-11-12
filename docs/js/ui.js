@@ -46,9 +46,11 @@
   // rows: [label, "good"|"warn"|"bad", status text]
   function dashboard() {
     const m = FT.mode, rows = m.dashboard(S), explain = m.explain || {};
+    const hints = m.improveHints ? m.improveHints() : {};
+    const how = k => hints[k] && hints[k].length ? ` <span class="improve">Improve it with: ${hints[k].join(", ")}.</span>` : "";
     return `<div class="dash" aria-label="Security status"><div class="dash-head">Security status</div>
       ${rows.map(([k, c, v]) => `<div class="drow"><span class="dk">${k}</span><span class="dv ${c}"><i aria-hidden="true"></i>${v}</span></div>`).join("")}
-      <details class="explain"><summary>What do these mean?</summary><dl>${rows.map(([k]) => explain[k] ? `<dt>${k}</dt><dd>${explain[k]}</dd>` : "").join("")}</dl></details></div>`;
+      <details class="explain"><summary>What do these mean?</summary><dl>${rows.map(([k]) => explain[k] || how(k) ? `<dt>${k}</dt><dd>${explain[k] || ""}${how(k)}</dd>` : "").join("")}</dl></details></div>`;
   }
 
   // Show a screen inside the standard frame, then focus the first control.

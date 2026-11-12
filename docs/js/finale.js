@@ -5,6 +5,11 @@
  *   2. Beachhead: EDR may stop them on the first computer.
  *   3. Spread: MDR (or you) may catch them, helped by earlier noise.
  *   4. Encryption: tested backups, or the ransom note.
+ *   5. Optionally, the leak site: they stole data before encrypting.
+ * Optional hooks in the config, all with sensible defaults:
+ *   encrypt.backupState(S): "restored" | "survived" | "slow" | "wiped" | "none"
+ *   encrypt.sanctioned(S): text shown when the gang can't legally be paid
+ *   leak: { when(S, key), intro(S, key), options(S), choose(S, id) }
  * The mechanics live here; every word comes from the mode's finale config. */
 (function () {
   const S = FT.S, L = FT.learned, { chance, roll } = FT.util, ui = FT.ui, sys = FT.sys;
@@ -68,15 +73,20 @@
 
     function encrypt() {
       const en = cfg.encrypt;
-      if (sys.backupsGood()) return finish("backups", en.restored(S));
+      const state = en.backupState ? en.backupState(S) : (sys.backupsGood() ? "restored" : "none");
+      if (state === "restored" || state === "survived") return finish("backups", en.restored(S, state === "survived"));
+      if (state === "slow") return finish("backups", en.restoredSlow(S));
+      // A gang on a sanctions list can't legally be paid, so the only way out is rebuilding
+      const banned = !!(S.gang.sanctioned && en.sanctioned);
+      if (banned && cfg.lessons.sanctions) L.set(...cfg.lessons.sanctions);
       ui.screen(`<div class="panel finale"><div class="clock">${en.clock}</div><h2>${en.title}</h2>
-        ${en.body(S)}
-        <div class="row"><button class="btn" data-x="pay">${en.payLabel}</button><button class="btn ghost" data-x="rebuild">${en.rebuildLabel}</button></div></div>`, "button[data-x]");
+        ${en.body(S, state)}${banned ? `<p><b>${en.sanctioned(S)}</b></p>` : ""}
+        <div class="row">${banned ? "" : `<button class="btn" data-x="pay">${en.payLabel}</button>`}<button class="btn ${banned ? "" : "ghost"}" data-x="rebuild">${banned ? (en.rebuildOnlyLabel || en.rebuildLabel) : en.rebuildLabel}</button></div></div>`, "button[data-x]");
       FT.app.querySelectorAll("button[data-x]").forEach(b => b.onclick = () => {
         FT.note(cfg.title, `Chose: ${b.textContent}.`);
         L.set(...cfg.lessons.ransom);
         if (b.dataset.x === "pay") finish("paid", en.paid(chance(.6)));
-        else finish("rebuilt", en.rebuilt);
+        else finish("rebuilt", banned && en.rebuiltNoChoice ? en.rebuiltNoChoice : en.rebuilt);
       });
     }
 
@@ -84,7 +94,18 @@
       S.finaleResult = key;
       if (anyLucky) L.set(...cfg.lessons.luck);
       // copy so the config's objects are never mutated by outcome adjustments
-      FT.screens.outcome(cfg.title, { text: r.text, fx: Object.assign({}, r.fx), lesson: r.lesson });
+      const done = extra => {
+        const fx = Object.assign({}, r.fx);
+        if (extra) { for (const k in extra.fx || {}) fx[k] = (fx[k] || 0) + extra.fx[k]; if (extra.lesson) L.set(...extra.lesson); }
+        FT.screens.outcome(cfg.title, { text: extra ? `${r.text} ${extra.text}` : r.text, fx, lesson: r.lesson });
+      };
+      if (!cfg.leak || !cfg.leak.when(S, key)) return done(null);
+      // They copied data before encrypting: what do you tell people?
+      const lk = cfg.leak;
+      ui.screen(`<div class="panel finale"><div class="clock">${lk.clock}</div><h2>${lk.title}</h2>${lk.intro(S, key)}
+        <p><b>What do you do?</b></p>
+        <div class="row">${lk.options(S).map((o, i) => `<button class="btn ${i ? "ghost" : ""}" data-l="${o.id}">${o.label}</button>`).join("")}</div></div>`, "button[data-l]");
+      FT.app.querySelectorAll("button[data-l]").forEach(b => b.onclick = () => { FT.note(lk.title, `Chose: ${b.textContent}.`); done(lk.choose(S, b.dataset.l)); });
     }
   }
 

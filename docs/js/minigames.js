@@ -36,7 +36,11 @@
       if (answered) { const n = document.getElementById("n"); n.focus(); n.onclick = () => { i++; seenSender = seenLink = false; i < set.length ? draw(false) : finish(); }; return; }
       const cs = document.getElementById("cs"); if (cs) cs.onclick = () => { seenSender = true; checks++; draw(false); const b = document.getElementById("cl") || document.querySelector("button[data-a]"); b && b.focus(); };
       const cl = document.getElementById("cl"); if (cl) cl.onclick = () => { seenLink = true; checks++; draw(false); document.querySelector("button[data-a]").focus(); };
-      FT.app.querySelectorAll("button[data-a]").forEach(b => b.onclick = () => { const ok = (b.dataset.a === "1") === e.phish; if (ok) correct++; draw(true, ok); });
+      FT.app.querySelectorAll("button[data-a]").forEach(b => b.onclick = () => {
+        const ok = (b.dataset.a === "1") === e.phish; if (ok) correct++;
+        if (!ok && e.phish && FT.mode && FT.mode.onPhishMiss) FT.mode.onPhishMiss(e); // a mode may let a missed phish leave access behind
+        draw(true, ok);
+      });
     }
     function finish() {
       if (correct === set.length) S.mgPerfect = (S.mgPerfect || 0) + 1;
@@ -149,6 +153,8 @@
           const c = b.dataset.t;
           if (c === a.answer) score += 1; else if (c === "escalate" || a.answer === "escalate") score += .5;
           if (c === "escalate") escalations++;
+          // A real threat closed as a false positive: a mode may leave the attacker in place
+          if (c === "fp" && a.answer === "real" && FT.mode && FT.mode.onTriageMiss) FT.mode.onTriageMiss(a);
           draw(c);
         });
         FT.app.querySelector("button[data-t]").focus();

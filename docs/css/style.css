@@ -100,6 +100,7 @@ details.explain summary{cursor:pointer;color:var(--teal);font-weight:700}
 details.explain dl{margin:.5rem 0 .2rem}
 details.explain dt{font-weight:700;margin-top:.4rem}
 details.explain dd{margin:0;color:var(--muted)}
+details.explain .improve{display:block;margin-top:.15rem;color:var(--ink);font-style:italic}
 .pq{font-size:1.1rem}
 .opt.pw .pwtext{font-family:"VT323","Courier New",monospace;font-size:1.35rem;overflow-wrap:anywhere}
 .opt.right{border-color:var(--good);border-width:3px} .opt.wrong{border-color:var(--bad);border-width:3px}
